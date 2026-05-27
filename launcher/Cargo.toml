@@ -1,5 +1,5 @@
 [package]
-name = "rebornmp"
+name = "launcher"
 version = "1.0.0"
 edition = "2021"
 
@@ -14,13 +14,4 @@ rfd = "0.14"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
-winapi = { version = "0.3", features = [
-    "winnt",
-    "handleapi",
-    "memoryapi",
-    "processthreadsapi",
-    "errhandlingapi",
-    "synchapi",
-    "tlhelp32"
-] }
 anyhow = "1.0"

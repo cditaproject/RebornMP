@@ -1,0 +1,15 @@
+[package]
+name = "proxy"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+name = "d3d11"
+
+[dependencies]
+winapi = { version = "0.3", features = [
+    "libloaderapi",
+    "errhandlingapi",
+    "winnt"
+] }
