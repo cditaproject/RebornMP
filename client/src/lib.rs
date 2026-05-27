@@ -1,90 +1,152 @@
-#![cfg(windows)]
+#![allow(non_snake_case)]
 
-use std::io::{Read, Write};
-use std::net::TcpStream;
-use std::thread;
-use std::time::Duration;
+mod hooks;
+mod memory;
+mod network;
+mod ui;
 
-use windows::Win32::Foundation::{BOOL, HINSTANCE};
-use windows::Win32::System::Console::AllocConsole;
-use windows::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
+use winapi::shared::minwindef::HINSTANCE;  // ← правильный путь
+use winapi::um::libloaderapi::DisableThreadLibraryCalls;
 
-// The DLL entry point
-#[unsafe(no_mangle)]
-#[allow(non_snake_case, unused_variables)]
-pub extern "system" fn DllMain(
-    dll_module: HINSTANCE,
-    call_reason: u32,
-    _reserved: *mut std::ffi::c_void,
-) -> BOOL {
-    const DLL_PROCESS_ATTACH: u32 = 1;
-    const DLL_PROCESS_DETACH: u32 = 0;
+static RUNNING: AtomicBool = AtomicBool::new(true);
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
+static STARTUP: Once = Once::new();
 
-    match call_reason {
-        DLL_PROCESS_ATTACH => {
-            unsafe {
-                DisableThreadLibraryCalls(dll_module).ok();
-            }
-            // Spawn a new thread so we don't block DllMain
-            thread::spawn(move || {
-                main_thread();
+#[no_mangle]
+pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> bool {
+    match reason {
+        1 => { // DLL_PROCESS_ATTACH
+            unsafe { DisableThreadLibraryCalls(module); }
+            
+            // Запускаем в отдельном потоке с задержкой
+            std::thread::spawn(|| {
+                // Даём игре время на стабильную загрузку
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                
+                STARTUP.call_once(|| {
+                    initialize_client();
+                });
             });
         }
-        DLL_PROCESS_DETACH => {
-            // Cleanup
+        0 => { // DLL_PROCESS_DETACH
+            RUNNING.store(false, Ordering::Relaxed);
+            cleanup_client();
         }
         _ => {}
     }
-
-    BOOL(1)
+    true
 }
 
-fn main_thread() {
-    // Allocate a console window for the game process
-    unsafe {
-        AllocConsole().ok();
+fn initialize_client() {
+    if INITIALIZED.load(Ordering::Relaxed) {
+        return;
     }
-
-    println!("========================================");
-    println!("     FreeMode - Client Injected!        ");
-    println!("========================================");
-    println!("Connecting to server at 127.0.0.1:8080...");
-
-    match TcpStream::connect("127.0.0.1:8080") {
-        Ok(mut stream) => {
-            println!("Successfully connected to server!");
+    
+    // Инициализируем логгер
+    let _ = simple_logger::init_with_level(log::Level::Info);
+    
+    log::info!("=========================================");
+    log::info!("RebornMP Client v{}", env!("CARGO_PKG_VERSION"));
+    log::info!("=========================================");
+    
+    // Инициализация компонентов с защитой от паники
+    let init_result = std::panic::catch_unwind(|| {
+        let _ = memory::init();
+        let _ = hooks::init();
+        let _ = network::init();
+        let _ = ui::init();
+    });
+    
+    match init_result {
+        Ok(_) => {
+            INITIALIZED.store(true, Ordering::Relaxed);
+            log::info!("✅ Все компоненты инициализированы");
             
-            let msg = b"Hello from GTA V injected Rust payload!\n";
-            if let Err(e) = stream.write_all(msg) {
-                println!("Failed to send data: {}", e);
-            }
-
-            let mut buffer = [0; 512];
-            loop {
-                match stream.read(&mut buffer) {
-                    Ok(0) => {
-                        println!("Connection closed by server.");
-                        break;
-                    }
-                    Ok(n) => {
-                        let text = String::from_utf8_lossy(&buffer[..n]);
-                        println!("Received from server: {}", text);
-                    }
-                    Err(e) => {
-                        println!("Error reading from connection: {}", e);
-                        break;
-                    }
-                }
-            }
+            // Запускаем главный цикл
+            main_loop();
         }
         Err(e) => {
-            println!("Failed to connect to server: {}", e);
-            println!("Make sure your server is running on 127.0.0.1:8080");
+            log::error!("❌ Ошибка инициализации: {:?}", e);
         }
     }
+}
 
-    // Keep the console open so the user can read the output
-    loop {
-        thread::sleep(Duration::from_secs(1));
+fn main_loop() {
+    log::info!("🔄 Запущен главный цикл");
+    
+    while RUNNING.load(Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        // Безопасный вызов обновлений
+        let _ = std::panic::catch_unwind(|| {
+            let _ = network::update();
+        });
+        
+        let _ = std::panic::catch_unwind(|| {
+            let _ = ui::render();
+        });
+        
+        let _ = std::panic::catch_unwind(|| {
+            let _ = hooks::on_frame();
+        });
+        
+        if !memory::is_game_alive() {
+            log::info!("Игра завершена, выходим...");
+            break;
+        }
     }
+    
+    cleanup_client();
+}
+
+fn cleanup_client() {
+    log::info!("🛑 Остановка клиента...");
+    
+    let _ = std::panic::catch_unwind(|| {
+        let _ = network::shutdown();
+        let _ = ui::shutdown();
+        let _ = hooks::cleanup();
+    });
+    
+    log::info!("👋 Client shutdown complete");
+}
+
+// Экспортируемые функции для взаимодействия с лаунчером
+#[no_mangle]
+pub extern "system" fn Connect(server: *const i8) -> bool {
+    if server.is_null() {
+        return false;
+    }
+    
+    let addr = unsafe {
+        std::ffi::CStr::from_ptr(server)
+            .to_string_lossy()
+            .into_owned()
+    };
+    
+    log::info!("📡 Запрос подключения к серверу: {}", addr);
+    network::connect(&addr)
+}
+
+#[no_mangle]
+pub extern "system" fn SendChat(msg: *const i8) -> bool {
+    if msg.is_null() {
+        return false;
+    }
+    
+    let text = unsafe {
+        std::ffi::CStr::from_ptr(msg)
+            .to_string_lossy()
+            .into_owned()
+    };
+    
+    network::send_chat(&text)
+}
+
+#[no_mangle]
+pub extern "system" fn GetPing() -> u32 {
+    network::get_ping()
 }

@@ -1,20 +1,30 @@
 [package]
 name = "launcher"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[[bin]]
+name = "launcher"
+path = "src/main.rs"
 
 [dependencies]
-sysinfo = "0.30"
-
-[target.'cfg(windows)'.dependencies.windows]
-version = "0.58.0"
-features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_System_Memory",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_LibraryLoader",
-    "Win32_Security",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-]
+winapi = { version = "0.3", features = [
+    "winnt",
+    "handleapi",
+    "memoryapi",
+    "processthreadsapi",
+    "errhandlingapi",
+    "synchapi",
+    "tlhelp32",
+    "libloaderapi"
+] }
+winreg = "0.52"
+anyhow = "1.0"
+log = "0.4"
+simple_logger = "4.2"
+egui = "0.27"
+eframe = "0.27"
+rfd = "0.14"  # Для диалога выбора файлов
+directories = "5.0"  # Для сохранения настроек
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
