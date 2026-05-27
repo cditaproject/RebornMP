@@ -1,13 +1,19 @@
 [package]
-name = "launcher"
-version = "0.1.0"
+name = "rebornmp"
+version = "1.0.0"
 edition = "2021"
 
 [[bin]]
-name = "launcher"
+name = "RebornMP"
 path = "src/main.rs"
 
 [dependencies]
+egui = "0.27"
+eframe = "0.27"
+rfd = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
 winapi = { version = "0.3", features = [
     "winnt",
     "handleapi",
@@ -15,16 +21,6 @@ winapi = { version = "0.3", features = [
     "processthreadsapi",
     "errhandlingapi",
     "synchapi",
-    "tlhelp32",
-    "libloaderapi"
+    "tlhelp32"
 ] }
-winreg = "0.52"
 anyhow = "1.0"
-log = "0.4"
-simple_logger = "4.2"
-egui = "0.27"
-eframe = "0.27"
-rfd = "0.14"  # Для диалога выбора файлов
-directories = "5.0"  # Для сохранения настроек
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"

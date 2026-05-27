@@ -1,81 +1,54 @@
-// ============================================
-// RebornMP Launcher - С выбором пути к GTA V
-// ============================================
-
 use eframe::egui;
 use egui::{Color32, RichText};
-use std::sync::mpsc;
-use std::thread;
-use std::path::PathBuf;
-use rfd::FileDialog;
 use serde::{Serialize, Deserialize};
-use directories::ProjectDirs;
+use std::thread;
 
 mod injector;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Config {
-    gta5_path: String,
     server_ip: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            gta5_path: "".to_string(),
             server_ip: "127.0.0.1:30120".to_string(),
         }
     }
 }
 
-struct RebornMPLauncher {
-    state: LauncherState,
-    server_ip: String,
-    gta5_path: String,
-    status_text: String,
-    _config: Config,
+struct RebornMP {
+    config: Config,
+    status: String,
+    state: AppState,
+    game_running: bool,
 }
 
 #[derive(Clone)]
-enum LauncherState {
+enum AppState {
     Idle,
-    Launching,
+    Injecting,
     Success,
     Error(String),
 }
 
-impl Default for RebornMPLauncher {
+impl Default for RebornMP {
     fn default() -> Self {
         let config = Self::load_config();
-        let mut app = Self {
-            state: LauncherState::Idle,
-            server_ip: config.server_ip.clone(),
-            gta5_path: config.gta5_path.clone(),
-            status_text: "Готов к работе".to_string(),
-            _config: config,
-        };
-        
-        // Автоматически ищем GTA V если путь не задан
-        if app.gta5_path.is_empty() {
-            if let Some(found_path) = injector::find_gta5_exe_auto() {
-                app.gta5_path = found_path.to_string_lossy().to_string();
-                app.save_config();
-                app.status_text = format!("Найдена GTA V: {}", app.gta5_path);
-            } else {
-                app.status_text = "Не найдена GTA V. Укажите путь вручную.".to_string();
-            }
-        } else {
-            app.status_text = format!("Путь к GTA V: {}", app.gta5_path);
+        Self {
+            status: "Готов к работе".to_string(),
+            state: AppState::Idle,
+            game_running: false,
+            config,
         }
-        
-        app
     }
 }
 
-impl RebornMPLauncher {
+impl RebornMP {
     fn load_config() -> Config {
-        if let Some(proj_dirs) = ProjectDirs::from("com", "rebornmp", "launcher") {
-            let config_path = proj_dirs.config_dir().join("config.json");
+        if let Some(config_dir) = dirs::config_dir() {
+            let config_path = config_dir.join("RebornMP").join("config.json");
             if config_path.exists() {
                 if let Ok(data) = std::fs::read_to_string(config_path) {
                     if let Ok(config) = serde_json::from_str(&data) {
@@ -88,113 +61,68 @@ impl RebornMPLauncher {
     }
     
     fn save_config(&self) {
-        let config = Config {
-            gta5_path: self.gta5_path.clone(),
-            server_ip: self.server_ip.clone(),
-        };
-        
-        if let Some(proj_dirs) = ProjectDirs::from("com", "rebornmp", "launcher") {
-            if let Err(e) = std::fs::create_dir_all(proj_dirs.config_dir()) {
-                eprintln!("Failed to create config dir: {}", e);
-                return;
-            }
-            let config_path = proj_dirs.config_dir().join("config.json");
-            if let Ok(data) = serde_json::to_string_pretty(&config) {
-                let _ = std::fs::write(config_path, data);
+        if let Some(config_dir) = dirs::config_dir() {
+            let config_path = config_dir.join("RebornMP");
+            let _ = std::fs::create_dir_all(&config_path);
+            let config_file = config_path.join("config.json");
+            if let Ok(data) = serde_json::to_string_pretty(&self.config) {
+                let _ = std::fs::write(config_file, data);
             }
         }
     }
     
-    fn select_gta5_path(&mut self) {
-        if let Some(path) = FileDialog::new()
-            .add_filter("GTA5 Executable", &["exe"])
-            .set_title("Выберите GTA5.exe")
-            .pick_file() 
-        {
-            if let Some(name) = path.file_name() {
-                if name.to_string_lossy().to_lowercase() == "gta5.exe" {
-                    self.gta5_path = path.to_string_lossy().to_string();
-                    self.status_text = format!("Выбран путь: {}", self.gta5_path);
-                    self.save_config();
-                } else {
-                    self.status_text = "Ошибка: выберите файл GTA5.exe".to_string();
-                }
-            }
-        }
+    fn check_game(&mut self) {
+        self.game_running = injector::find_gta5_pid().is_some();
     }
     
-    fn launch(&mut self) {
-        if self.gta5_path.is_empty() {
-            self.state = LauncherState::Error("Не указан путь к GTA5.exe!".to_string());
-            self.status_text = "Ошибка: укажите путь к GTA V".to_string();
-            return;
-        }
+    fn inject(&mut self) {
+        self.state = AppState::Injecting;
+        self.status = "Инжекция...".to_string();
         
-        // Проверяем существование файла
-        let path = PathBuf::from(&self.gta5_path);
-        if !path.exists() {
-            self.state = LauncherState::Error("GTA5.exe не найден!".to_string());
-            self.status_text = format!("❌ Файл не существует: {}", self.gta5_path);
-            return;
-        }
-        
-        let gta_path = self.gta5_path.clone();
-        let server_ip = self.server_ip.clone();
-        
-        self.state = LauncherState::Launching;
-        self.status_text = "Запуск... Смотрите консоль для деталей".to_string();
-        
-        let (tx, rx) = mpsc::channel();
+        let server_ip = self.config.server_ip.clone();
         
         thread::spawn(move || {
-            let result = injector::start_with_path(server_ip, gta_path);
-            tx.send(result).unwrap();
+            match injector::inject_to_running(server_ip) {
+                Ok(_) => {
+                    println!("✅ Инжект успешен!");
+                }
+                Err(e) => {
+                    println!("❌ Ошибка: {}", e);
+                }
+            }
         });
         
-        match rx.recv().unwrap() {
-            Ok(_) => {
-                self.state = LauncherState::Success;
-                self.status_text = "✅ Инжект успешен! Игра запущена.".to_string();
-            }
-            Err(e) => {
-                let error_msg = format!("{}", e);
-                self.state = LauncherState::Error(error_msg.clone());
-                self.status_text = format!("❌ Ошибка: {}", error_msg);
-            }
-        }
+        self.state = AppState::Success;
+        self.status = "Мод загружен!".to_string();
     }
 }
 
-impl eframe::App for RebornMPLauncher {
+impl eframe::App for RebornMP {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Стилизация окна
+        // Проверяем запущена ли игра
+        self.check_game();
+        
         let mut style = (*ctx.style()).clone();
         style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(30, 30, 35);
-        style.visuals.widgets.active.bg_fill = Color32::from_rgb(45, 45, 50);
         ctx.set_style(style);
         
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
                 
-                // Заголовок
-                ui.heading(RichText::new("🎮 RebornMP Launcher")
+                ui.heading(RichText::new("🎮 RebornMP")
                     .size(28.0)
                     .color(Color32::from_rgb(255, 100, 100)));
-                ui.label(RichText::new("Custom Multiplayer for GTA V").size(14.0));
+                ui.label(RichText::new("Multiplayer для GTA V").size(14.0));
                 ui.add_space(20.0);
                 
-                // Путь к GTA V
-                ui.group(|ui| {
-                    ui.label(RichText::new("📁 ПУТЬ К GTA V").strong());
-                    ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.gta5_path);
-                        if ui.button("📂 Обзор").clicked() {
-                            self.select_gta5_path();
-                        }
-                    });
-                    ui.label(RichText::new("Выберите GTA5.exe из папки с игрой").size(11.0));
-                });
+                // Статус игры
+                if self.game_running {
+                    ui.colored_label(Color32::GREEN, "✅ GTA V ЗАПУЩЕНА");
+                } else {
+                    ui.colored_label(Color32::RED, "❌ GTA V НЕ ЗАПУЩЕНА");
+                    ui.label("Сначала запустите GTA V и загрузитесь в сюжетку");
+                }
                 ui.add_space(10.0);
                 
                 // Сервер
@@ -202,76 +130,68 @@ impl eframe::App for RebornMPLauncher {
                     ui.label(RichText::new("🌐 СЕРВЕР").strong());
                     ui.horizontal(|ui| {
                         ui.label("IP:");
-                        ui.text_edit_singleline(&mut self.server_ip);
+                        ui.text_edit_singleline(&mut self.config.server_ip);
                     });
-                    ui.label(RichText::new("Пример: 127.0.0.1:30120").size(11.0));
+                    ui.label(RichText::new("IP адрес сервера для подключения").size(11.0));
                 });
                 ui.add_space(20.0);
                 
                 // Статус и кнопка
                 match &self.state {
-                    LauncherState::Idle => {
-                        ui.colored_label(Color32::GREEN, format!("✅ {}", self.status_text));
-                        if ui.button("🚀 ЗАПУСТИТЬ GTA V").clicked() {
-                            self.launch();
+                    AppState::Idle => {
+                        ui.colored_label(Color32::GREEN, format!("✅ {}", self.status));
+                        
+                        if self.game_running {
+                            if ui.button("💉 ИНЖЕКТИРОВАТЬ МОД").clicked() {
+                                self.inject();
+                            }
+                        } else {
+                            ui.add_enabled(false, egui::Button::new("💉 ИНЖЕКТИРОВАТЬ МОД"));
+                            ui.label("Запустите GTA V чтобы активировать кнопку");
                         }
                     }
-                    LauncherState::Launching => {
-                        ui.colored_label(Color32::YELLOW, format!("⏳ {}", self.status_text));
+                    AppState::Injecting => {
+                        ui.colored_label(Color32::YELLOW, format!("💉 {}", self.status));
                         ui.spinner();
-                        ui.label("Инжектируем DLL...");
                     }
-                    LauncherState::Success => {
-                        ui.colored_label(Color32::GREEN, format!("✅ {}", self.status_text));
-                        ui.label("Клиент загружен! Можно играть.");
-                        if ui.button("🔄 НОВЫЙ ЗАПУСК").clicked() {
-                            self.state = LauncherState::Idle;
-                            self.status_text = "Готов к работе".to_string();
+                    AppState::Success => {
+                        ui.colored_label(Color32::GREEN, format!("✅ {}", self.status));
+                        if ui.button("🔄 НОВЫЙ ИНЖЕКТ").clicked() {
+                            self.state = AppState::Idle;
+                            self.status = "Готов к работе".to_string();
                         }
                     }
-                    LauncherState::Error(msg) => {
+                    AppState::Error(msg) => {
                         ui.colored_label(Color32::RED, format!("❌ {}", msg));
-                        if ui.button("🔄 ПОВТОРИТЬ").clicked() {
-                            self.state = LauncherState::Idle;
-                            self.status_text = "Готов к работе".to_string();
+                        if ui.button("🔄 Повторить").clicked() {
+                            self.state = AppState::Idle;
+                            self.status = "Готов к работе".to_string();
                         }
                     }
                 }
                 
                 ui.add_space(20.0);
                 ui.separator();
-                ui.label(RichText::new("📌 Информация").strong());
-                ui.label("• Запускайте лаунчер от имени Администратора");
+                ui.label(RichText::new("📌 ИНСТРУКЦИЯ").strong());
+                ui.label("1. Запустите GTA V (одиночная игра)");
+                ui.label("2. Полностью загрузитесь в сюжетку");
+                ui.label("3. Нажмите «ИНЖЕКТИРОВАТЬ МОД»");
+                ui.label("");
+                ui.label(RichText::new("⚠️ Важно!").strong());
                 ui.label("• client.dll должна быть рядом с лаунчером");
-                ui.label("• Путь сохраняется автоматически");
-                ui.label("• Steam версия: C:\\Program Files (x86)\\Steam\\...");
-                ui.label("• Rockstar версия: C:\\Program Files\\Rockstar Games\\...");
+                ui.label("• Запускайте лаунчер от Администратора");
             });
         });
         
-        // Обновляем UI каждые 100 мс
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
 
-// ============================================
-// ГЛАВНАЯ ФУНКЦИЯ - ТОЧКА ВХОДА
-// ============================================
-fn main() -> Result<(), eframe::Error> {
-    simple_logger::init_with_level(log::Level::Info).unwrap_or(());
-    
-    println!("=========================================");
-    println!("🎮 RebornMP Launcher v0.1.0");
-    println!("=========================================");
-    println!("");
-    println!("📌 ВАЖНО: Запустите этот лаунчер от имени Администратора!");
-    println!("📌 client.dll должна находиться в той же папке, что и launcher.exe");
-    println!("");
-    
+fn main() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([600.0, 550.0])
-            .with_min_inner_size([550.0, 500.0])
+            .with_inner_size([500.0, 520.0])
+            .with_min_inner_size([450.0, 480.0])
             .with_resizable(true)
             .with_title("RebornMP Launcher"),
         ..Default::default()
@@ -280,6 +200,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "RebornMP Launcher",
         options,
-        Box::new(|_cc| Box::new(RebornMPLauncher::default())),
-    )
+        Box::new(|_cc| Box::new(RebornMP::default())),
+    ).unwrap();
 }
