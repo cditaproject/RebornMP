@@ -1,5 +1,5 @@
 // client/src/webview_chat.rs
-// WebView2 чат для версии 0.1.4 - исправленная версия
+// WebView2 чат для версии 0.1.4 - полностью исправлен
 
 use webview2::{Environment, Controller, WebView};
 use winapi::um::winuser::*;
@@ -28,7 +28,6 @@ pub fn init_webview() -> bool {
         
         println!("[WebView] Creating environment...");
         
-        // Создаём среду через builder
         let (tx, rx) = std::sync::mpsc::channel();
         
         let result = Environment::builder()
@@ -52,7 +51,6 @@ pub fn init_webview() -> bool {
         
         println!("[WebView] Environment created, creating controller...");
         
-        // Создаём контроллер - используем HWND напрямую
         let (tx, rx) = std::sync::mpsc::channel();
         
         let _ = env.create_controller(hwnd, move |controller_result| {
@@ -70,7 +68,6 @@ pub fn init_webview() -> bool {
         
         println!("[WebView] Controller created, getting webview...");
         
-        // Получаем WebView из контроллера
         let webview = match controller.get_webview() {
             Ok(wv) => wv,
             Err(e) => {
@@ -79,7 +76,6 @@ pub fn init_webview() -> bool {
             }
         };
         
-        // HTML интерфейс чата
         let html = r#"
         <!DOCTYPE html>
         <html style="background: transparent;">
@@ -217,7 +213,7 @@ pub fn add_message(text: &str, is_system: bool) {
     });
 }
 
-pub function show_chat() {
+pub fn show_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
             let _ = wv.execute_script("window.showInput();", |_| Ok(()));
@@ -225,7 +221,7 @@ pub function show_chat() {
     });
 }
 
-pub function hide_chat() {
+pub fn hide_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
             let _ = wv.execute_script("window.hideInput();", |_| Ok(()));
