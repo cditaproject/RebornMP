@@ -1,47 +1,139 @@
 // client/src/ui.rs
-// Используем нашу самописную библиотеку
+// RebornMP UI Manager - С чатом поверх игры!
 
-use crate::overlay::GameOverlay;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use lazy_static::lazy_static;
+use crate::overlay::SimpleOverlay;
 
-lazy_static! {
-    pub static ref OVERLAY: GameOverlay = GameOverlay::new();
-    pub static ref CHAT: ChatManager = ChatManager::new();
+#[derive(Clone)]
+pub struct ChatMessage {
+    pub text: String,
+    pub timestamp: u64,
+    pub is_system: bool,
+}
+
+pub struct ChatManager {
+    messages: Mutex<VecDeque<ChatMessage>>,
+    input_buffer: Mutex<String>,
+    is_open: Mutex<bool>,
+    overlay: SimpleOverlay,
 }
 
 impl ChatManager {
-    pub fn render(&self) {
-        if !OVERLAY.attach_to_game() {
-            return;
+    pub fn new() -> Self {
+        let overlay = SimpleOverlay::new();
+        overlay.init();
+        
+        ChatManager {
+            messages: Mutex::new(VecDeque::with_capacity(100)),
+            input_buffer: Mutex::new(String::new()),
+            is_open: Mutex::new(false),
+            overlay,
+        }
+    }
+    
+    pub fn add_message(&self, text: String, is_system: bool) {
+        let mut messages = self.messages.lock().unwrap();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        messages.push_back(ChatMessage { text: text.clone(), timestamp, is_system });
+        
+        while messages.len() > 50 {
+            messages.pop_front();
         }
         
-        OVERLAY.begin_frame();
+        println!("[{}] {}", if is_system { "SYSTEM" } else { "CHAT" }, text);
+        self.render();
+    }
+    
+    pub fn toggle_input(&self) {
+        let mut is_open = self.is_open.lock().unwrap();
+        *is_open = !*is_open;
+        if !*is_open {
+            self.input_buffer.lock().unwrap().clear();
+        }
+        self.render();
+    }
+    
+    pub fn is_input_open(&self) -> bool {
+        *self.is_open.lock().unwrap()
+    }
+    
+    pub fn get_input_text(&self) -> String {
+        self.input_buffer.lock().unwrap().clone()
+    }
+    
+    pub fn add_char(&self, c: char) {
+        if *self.is_open.lock().unwrap() {
+            self.input_buffer.lock().unwrap().push(c);
+            self.render();
+        }
+    }
+    
+    pub fn backspace(&self) {
+        if *self.is_open.lock().unwrap() {
+            self.input_buffer.lock().unwrap().pop();
+            self.render();
+        }
+    }
+    
+    pub fn send_message(&self) -> Option<String> {
+        if *self.is_open.lock().unwrap() {
+            let msg = self.input_buffer.lock().unwrap().clone();
+            if !msg.is_empty() {
+                self.input_buffer.lock().unwrap().clear();
+                *self.is_open.lock().unwrap() = false;
+                self.render();
+                return Some(msg);
+            }
+            *self.is_open.lock().unwrap() = false;
+            self.render();
+        }
+        None
+    }
+    
+    pub fn render(&self) {
+        // Очищаем область чата
+        self.overlay.clear_area(10, 50, 400, 400);
         
-        // Фон чата
-        OVERLAY.draw_rounded_rect(10, 50, 380, 300, 0x80000000);
+        // Рисуем фон чата (полупрозрачный чёрный)
+        self.overlay.rect(10, 50, 400, 350, 0, 0, 0, 200);
         
         let messages = self.messages.lock().unwrap();
-        let start = if messages.len() > 12 { messages.len() - 12 } else { 0 };
+        let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
         
         let mut y = 70;
         for msg in messages.iter().skip(start) {
             let (r, g, b) = if msg.is_system {
-                (255, 200, 100)
+                (255, 200, 100)  // Жёлтый для системы
             } else {
-                (100, 255, 100)
+                (100, 255, 100)  // Зелёный для игроков
             };
             
-            let prefix = if msg.is_system { "[SYS]" } else "[CHAT]" };
+            let prefix = if msg.is_system { "[SYS]" } else { "[CHAT]" };
             let text = format!("{} {}", prefix, msg.text);
-            OVERLAY.draw_text(&text, 20, y, r, g, b);
-            y += 25;
+            self.overlay.text(&text, 20, y, r, g, b);
+            y += 22;
         }
         
         if *self.is_open.lock().unwrap() {
             let input = self.get_input_text();
-            OVERLAY.draw_rounded_rect(10, y + 10, 380, 35, 0xCC000000);
-            OVERLAY.draw_text(&format!("> {}", input), 20, y + 20, 255, 255, 255);
+            // Рисуем поле ввода
+            self.overlay.rect(10, y + 10, 400, 35, 40, 40, 40, 220);
+            self.overlay.text(&format!("> {}", input), 20, y + 20, 255, 255, 255);
         }
-        
-        OVERLAY.end_frame();
     }
+    
+    pub fn get_messages(&self) -> Vec<ChatMessage> {
+        self.messages.lock().unwrap().iter().cloned().collect()
+    }
+}
+
+lazy_static! {
+    pub static ref CHAT: ChatManager = ChatManager::new();
 }
