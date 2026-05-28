@@ -1,118 +1,109 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+// client/src/network.rs
+// RebornMP Network Client - Full Version
+
+use std::net::TcpStream;
+use std::io::{Read, Write};
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
-use tungstenite::{connect, Message};
-use url::Url;
-use serde_json::json;
-use std::sync::LazyLock;
-use std::sync::Mutex;
 
-static SERVER_ADDR: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new("ws://127.0.0.1:8080/ws".to_string()));
-static CONNECTED: AtomicBool = AtomicBool::new(false);
-
-pub fn set_server_addr(addr: String) {
-    let ws_addr = if addr.starts_with("ws://") {
-        addr.clone()
-    } else if addr.starts_with("http://") {
-        addr.replace("http://", "ws://") + "/ws"
-    } else {
-        format!("ws://{}/ws", addr)
-    };
-    *SERVER_ADDR.lock().unwrap() = ws_addr.clone();
-    println!("[Network] Server address set to: {}", ws_addr);
+pub struct NetworkClient {
+    stream: Option<TcpStream>,
+    send_queue: Sender<String>,
+    receive_queue: Receiver<String>,
+    connected: bool,
 }
 
-pub fn start_client() {
-    println!("[Network] Starting client...");
-    
-    thread::spawn(|| {
-        connect_to_server();
-    });
-}
-
-fn connect_to_server() {
-    let addr = SERVER_ADDR.lock().unwrap().clone();
-    println!("[Network] Connecting to {}", addr);
-    
-    let url = match Url::parse(&addr) {
-        Ok(url) => url,
-        Err(e) => {
-            println!("[Network] Invalid URL: {}", e);
-            return;
-        }
-    };
-    
-    match connect(url) {
-        Ok((mut ws_stream, _)) => {
-            println!("[Network] Successfully connected to server!");
-            CONNECTED.store(true, Ordering::Relaxed);
-            
-            // Отправляем приветственное сообщение
-            let welcome_msg = json!({
-                "type": "connect",
-                "client": "freemode-mp",
-                "version": "1.0.0"
-            }).to_string();
-            
-            if let Err(e) = ws_stream.send(Message::Text(welcome_msg)) {
-                println!("[Network] Failed to send welcome: {}", e);
-                return;
-            }
-            
-            // Приём сообщений
-            loop {
-                match ws_stream.read() {
-                    Ok(Message::Text(text)) => {
-                        println!("[Network] Received: {}", text);
-                        handle_message(&text);
-                    }
-                    Ok(Message::Close(_)) => {
-                        println!("[Network] Connection closed by server");
-                        break;
-                    }
-                    Err(e) => {
-                        println!("[Network] Error: {}", e);
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Err(e) => {
-            println!("[Network] Failed to connect: {}", e);
+impl NetworkClient {
+    pub fn new() -> Self {
+        let (send_tx, send_rx) = channel();
+        let (recv_tx, recv_rx) = channel();
+        
+        NetworkClient {
+            stream: None,
+            send_queue: send_tx,
+            receive_queue: recv_rx,
+            connected: false,
         }
     }
-    CONNECTED.store(false, Ordering::Relaxed);
-}
-
-fn handle_message(text: &str) {
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
-        if let Some(msg_type) = json.get("type").and_then(|t| t.as_str()) {
-            match msg_type {
-                "welcome" => {
-                    println!("[Network] Welcome from server!");
-                }
-                _ => {
-                    println!("[Network] Server message: {}", text);
-                }
+    
+    pub fn connect(&mut self, server_ip: &str) -> bool {
+        println!("[Network] Connecting to {}...", server_ip);
+        
+        match TcpStream::connect(server_ip) {
+            Ok(stream) => {
+                println!("[Network] Connected successfully!");
+                self.stream = Some(stream.try_clone().unwrap());
+                self.connected = true;
+                
+                // Клонируем каналы для потоков
+                let send_tx = self.send_queue.clone();
+                let mut send_stream = stream.try_clone().unwrap();
+                
+                // Поток отправки
+                thread::spawn(move || {
+                    for msg in send_tx {
+                        let _ = send_stream.write_all(msg.as_bytes());
+                        let _ = send_stream.write_all(b"\n");
+                        let _ = send_stream.flush();
+                    }
+                });
+                
+                // Поток получения
+                let recv_tx = self.receive_queue.clone();
+                let mut recv_stream = stream;
+                thread::spawn(move || {
+                    let mut buffer = String::new();
+                    let mut temp = [0u8; 4096];
+                    loop {
+                        match recv_stream.read(&mut temp) {
+                            Ok(n) if n > 0 => {
+                                buffer.push_str(&String::from_utf8_lossy(&temp[..n]));
+                                while let Some(pos) = buffer.find('\n') {
+                                    let msg = buffer[..pos].to_string();
+                                    let _ = recv_tx.send(msg);
+                                    buffer = buffer[pos + 1..].to_string();
+                                }
+                            }
+                            Ok(_) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                });
+                
+                true
+            }
+            Err(e) => {
+                println!("[Network] Connection failed: {}", e);
+                false
             }
         }
     }
-}
-
-pub fn send_chat(text: String) -> bool {
-    if !CONNECTED.load(Ordering::Relaxed) {
-        println!("[Network] Not connected to server");
-        return false;
+    
+    pub fn send_position(&mut self, x: f32, y: f32, z: f32) {
+        if self.connected {
+            let msg = format!("POS|{}|{}|{}", x, y, z);
+            let _ = self.send_queue.send(msg);
+        }
     }
     
-    println!("[Network] Sending chat: {}", text);
-    true
-}
-
-pub fn update() {}
-
-pub fn shutdown() {
-    println!("[Network] Shutting down...");
-    CONNECTED.store(false, Ordering::Relaxed);
+    pub fn send_chat(&mut self, text: &str) {
+        if self.connected {
+            let msg = format!("CHAT|{}", text);
+            let _ = self.send_queue.send(msg);
+        }
+    }
+    
+    pub fn receive_messages(&mut self) -> Vec<String> {
+        let mut messages = Vec::new();
+        while let Ok(msg) = self.receive_queue.try_recv() {
+            messages.push(msg);
+        }
+        messages
+    }
+    
+    pub fn disconnect(&mut self) {
+        self.connected = false;
+        let _ = self.send_queue.send("DISCONNECT".to_string());
+        println!("[Network] Disconnected");
+    }
 }
