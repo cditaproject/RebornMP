@@ -1,155 +1,149 @@
-// client/src/ui.rs
-// RebornMP UI Manager - Full Version (Chat + HUD)
+// client/src/network.rs
+// RebornMP Network Client - Full Version (TCP + WebSocket)
 
-use std::sync::Mutex;
-use std::collections::VecDeque;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::net::TcpStream;
+use std::io::{Read, Write};
+use std::sync::mpsc::{channel, Sender, Receiver};
+use std::thread;
+use std::time::Duration;
 
-// ========== СТРУКТУРЫ СООБЩЕНИЙ ==========
-#[derive(Clone)]
-pub struct ChatMessage {
-    pub text: String,
-    pub timestamp: u64,
-    pub is_system: bool,
+pub struct NetworkClient {
+    stream: Option<TcpStream>,
+    send_queue: Sender<String>,
+    receive_queue: Receiver<String>,
+    connected: bool,
+    player_name: String,
 }
 
-// ========== МЕНЕДЖЕР ЧАТА ==========
-pub struct ChatManager {
-    messages: Mutex<VecDeque<ChatMessage>>,
-    input_buffer: Mutex<String>,
-    is_open: Mutex<bool>,
-    max_messages: usize,
-}
-
-impl ChatManager {
+impl NetworkClient {
     pub fn new() -> Self {
-        ChatManager {
-            messages: Mutex::new(VecDeque::with_capacity(100)),
-            input_buffer: Mutex::new(String::new()),
-            is_open: Mutex::new(false),
-            max_messages: 50,
-        }
-    }
-    
-    pub fn add_message(&self, text: String, is_system: bool) {
-        let mut messages = self.messages.lock().unwrap();
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let (send_tx, send_rx) = channel();
+        let (recv_tx, recv_rx) = channel();
         
-        messages.push_back(ChatMessage { text, timestamp, is_system });
+        NetworkClient {
+            stream: None,
+            send_queue: send_tx,
+            receive_queue: recv_rx,
+            connected: false,
+            player_name: format!("Player_{}", rand::random::<u32>()),
+        }
+    }
+    
+    pub fn connect(&mut self, server_ip: &str) -> bool {
+        println!("[Network] Connecting to {}...", server_ip);
         
-        while messages.len() > self.max_messages {
-            messages.pop_front();
-        }
-        
-        // Для отладки выводим в консоль
-        let prefix = if is_system { "[SYSTEM]" } else { "[CHAT]" };
-        println!("{} {}", prefix, text);
-    }
-    
-    pub fn get_messages(&self) -> Vec<ChatMessage> {
-        self.messages.lock().unwrap().iter().cloned().collect()
-    }
-    
-    pub fn toggle_input(&self) {
-        let mut is_open = self.is_open.lock().unwrap();
-        *is_open = !*is_open;
-        if !*is_open {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.clear();
-        }
-    }
-    
-    pub fn is_input_open(&self) -> bool {
-        *self.is_open.lock().unwrap()
-    }
-    
-    pub fn get_input_text(&self) -> String {
-        self.input_buffer.lock().unwrap().clone()
-    }
-    
-    pub fn add_char(&self, c: char) {
-        if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.push(c);
-        }
-    }
-    
-    pub fn backspace(&self) {
-        if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.pop();
-        }
-    }
-    
-    pub fn send_message(&self) -> Option<String> {
-        if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            let message = buffer.clone();
-            if !message.is_empty() {
-                buffer.clear();
-                self.toggle_input();
-                return Some(message);
+        match TcpStream::connect(server_ip) {
+            Ok(stream) => {
+                println!("[Network] Connected successfully!");
+                self.stream = Some(stream.try_clone().unwrap());
+                self.connected = true;
+                
+                // Клонируем каналы для потоков
+                let send_tx = self.send_queue.clone();
+                let mut send_stream = stream.try_clone().unwrap();
+                
+                // Поток отправки сообщений
+                thread::spawn(move || {
+                    for msg in send_tx {
+                        if let Err(e) = send_stream.write_all(msg.as_bytes()) {
+                            println!("[Network] Send error: {}", e);
+                            break;
+                        }
+                        if let Err(e) = send_stream.write_all(b"\n") {
+                            println!("[Network] Send newline error: {}", e);
+                            break;
+                        }
+                        if let Err(e) = send_stream.flush() {
+                            println!("[Network] Flush error: {}", e);
+                            break;
+                        }
+                    }
+                });
+                
+                // Поток получения сообщений
+                let recv_tx = self.receive_queue.clone();
+                let mut recv_stream = stream;
+                thread::spawn(move || {
+                    let mut buffer = String::new();
+                    let mut temp = [0u8; 4096];
+                    loop {
+                        match recv_stream.read(&mut temp) {
+                            Ok(n) if n > 0 => {
+                                buffer.push_str(&String::from_utf8_lossy(&temp[..n]));
+                                while let Some(pos) = buffer.find('\n') {
+                                    let msg = buffer[..pos].to_string();
+                                    if let Err(e) = recv_tx.send(msg) {
+                                        println!("[Network] Receive queue error: {}", e);
+                                    }
+                                    buffer = buffer[pos + 1..].to_string();
+                                }
+                            }
+                            Ok(_) => {
+                                thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("[Network] Read error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                });
+                
+                true
             }
-        }
-        None
-    }
-    
-    pub fn clear(&self) {
-        let mut messages = self.messages.lock().unwrap();
-        messages.clear();
-    }
-}
-
-// ========== ОСНОВНОЙ UI МЕНЕДЖЕР ==========
-pub struct UIManager {
-    show_hud: Mutex<bool>,
-    show_debug: Mutex<bool>,
-}
-
-impl UIManager {
-    pub fn new() -> Self {
-        println!("[UI] UIManager initialized");
-        UIManager {
-            show_hud: Mutex::new(true),
-            show_debug: Mutex::new(false),
-        }
-    }
-    
-    pub fn update(&self) {
-        // Рендерим HUD (пока только в консоль для отладки)
-        if *self.show_hud.lock().unwrap() {
-            // Здесь будет отрисовка через DirectX/ImGui
-            // Пока просто выводим состояние чата
-            let chat = CHAT;
-            if chat.is_input_open() {
-                print!("\r[CHAT] > {:<50}", chat.get_input_text());
+            Err(e) => {
+                println!("[Network] Connection failed: {}", e);
+                self.connected = false;
+                false
             }
         }
     }
     
-    pub fn show_hud(&self, visible: bool) {
-        let mut hud = self.show_hud.lock().unwrap();
-        *hud = visible;
+    pub fn send_position(&mut self, x: f32, y: f32, z: f32) {
+        if self.connected {
+            let msg = format!("POS|{}|{}|{}", x, y, z);
+            let _ = self.send_queue.send(msg);
+        }
     }
     
-    pub fn toggle_debug(&self) {
-        let mut debug = self.show_debug.lock().unwrap();
-        *debug = !*debug;
-        let status = if *debug { "on" } else { "off" };
-        CHAT.add_message(format!("🔧 Debug mode: {}", status), true);
+    pub fn send_chat(&mut self, text: &str) {
+        if self.connected && !text.is_empty() {
+            let msg = format!("CHAT|{}", text);
+            let _ = self.send_queue.send(msg);
+        }
     }
     
-    pub fn add_chat_message(&self, text: &str, is_system: bool) {
-        CHAT.add_message(text.to_string(), is_system);
+    pub fn send_command(&mut self, cmd: &str, args: &str) {
+        if self.connected {
+            let msg = format!("CMD|{}|{}", cmd, args);
+            let _ = self.send_queue.send(msg);
+        }
     }
-}
-
-// ========== ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР ЧАТА ==========
-use lazy_static::lazy_static;
-
-lazy_static! {
-    pub static ref CHAT: ChatManager = ChatManager::new();
+    
+    pub fn receive_messages(&mut self) -> Vec<String> {
+        let mut messages = Vec::new();
+        while let Ok(msg) = self.receive_queue.try_recv() {
+            messages.push(msg);
+        }
+        messages
+    }
+    
+    pub fn disconnect(&mut self) {
+        self.connected = false;
+        let _ = self.send_queue.send("DISCONNECT".to_string());
+        println!("[Network] Disconnected from server");
+    }
+    
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+    
+    pub fn set_player_name(&mut self, name: &str) {
+        self.player_name = name.to_string();
+    }
+    
+    pub fn get_player_name(&self) -> &str {
+        &self.player_name
+    }
 }
