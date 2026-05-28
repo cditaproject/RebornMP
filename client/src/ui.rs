@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use lazy_static::lazy_static;
+use winapi::um::wingdi::RGB;
 use crate::overlay::SimpleOverlay;
 
 #[derive(Clone)]
@@ -102,30 +103,30 @@ impl ChatManager {
         self.overlay.clear_area(10, 50, 400, 400);
         
         // Рисуем фон чата (полупрозрачный чёрный)
-        self.overlay.rect(10, 50, 400, 350, 0, 0, 0, 200);
+        self.overlay.rect(10, 50, 400, 350, RGB(0, 0, 0));
         
         let messages = self.messages.lock().unwrap();
         let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
         
         let mut y = 70;
         for msg in messages.iter().skip(start) {
-            let (r, g, b) = if msg.is_system {
-                (255, 200, 100)  // Жёлтый для системы
+            let color = if msg.is_system {
+                RGB(255, 200, 100)  // Жёлтый для системы
             } else {
-                (100, 255, 100)  // Зелёный для игроков
+                RGB(100, 255, 100)  // Зелёный для игроков
             };
             
             let prefix = if msg.is_system { "[SYS]" } else { "[CHAT]" };
             let text = format!("{} {}", prefix, msg.text);
-            self.overlay.text(&text, 20, y, r, g, b);
+            self.overlay.text(&text, 20, y, color);
             y += 22;
         }
         
         if *self.is_open.lock().unwrap() {
             let input = self.get_input_text();
             // Рисуем поле ввода
-            self.overlay.rect(10, y + 10, 400, 35, 40, 40, 40, 220);
-            self.overlay.text(&format!("> {}", input), 20, y + 20, 255, 255, 255);
+            self.overlay.rect(10, y + 10, 400, 35, RGB(40, 40, 40));
+            self.overlay.text(&format!("> {}", input), 20, y + 20, RGB(255, 255, 255));
         }
     }
     
