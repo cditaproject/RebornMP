@@ -1,5 +1,5 @@
 // launcher/src/main.rs
-// RebornMP Launcher with detailed logging
+// RebornMP Launcher - Full Version (Injection + Logging + All Features)
 
 use std::process::{Command, Child};
 use std::path::PathBuf;
@@ -8,26 +8,23 @@ use std::time::Duration;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
-// Правильные импорты для winapi
 use winapi::um::winnt::{
-    PROCESS_ALL_ACCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION,
-    PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
-    MEM_COMMIT, MEM_RESERVE, MEM_RELEASE, PAGE_READWRITE
+    PROCESS_ALL_ACCESS, MEM_COMMIT, MEM_RESERVE, MEM_RELEASE, PAGE_READWRITE
 };
 use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread};
 use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory, VirtualFreeEx};
 use winapi::um::libloaderapi::{GetModuleHandleA, GetProcAddress};
 use winapi::um::handleapi::CloseHandle;
-use winapi::shared::minwindef::{DWORD, LPVOID, FARPROC, HMODULE, UINT, BOOL};
+use winapi::shared::minwindef::{DWORD, LPVOID, BOOL};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::processthreadsapi::GetCurrentProcess;
 use winapi::um::securitybaseapi::GetTokenInformation;
 use winapi::um::winnt::{TOKEN_QUERY, TokenElevation};
-use winapi::ctypes::c_void;  // Добавлено для правильного типа
+use winapi::ctypes::c_void;
 
-// ========== ЛОГГЕР С РАЗНЫМИ УРОВНЯМИ ==========
+// ========== ЛОГГЕР ==========
 #[derive(PartialEq, PartialOrd)]
 enum LogLevel {
     DEBUG = 0,
@@ -55,7 +52,6 @@ impl Logger {
         } else {
             None
         };
-        
         Logger { level, file }
     }
     
@@ -70,6 +66,7 @@ impl Logger {
                 LogLevel::SUCCESS => "\x1b[92m",
                 LogLevel::WARNING => "\x1b[33m",
                 LogLevel::ERROR => "\x1b[31m",
+                _ => "",
             };
             print!("{}{}\x1b[0m", color, message);
             
@@ -93,7 +90,7 @@ fn main() {
     let mut logger = Logger::new(LogLevel::DEBUG, true);
     
     logger.info("========================================");
-    logger.info("RebornMP Launcher v0.1.0 - Debug Mode");
+    logger.info("RebornMP Launcher v0.2.0 - Full Version");
     logger.info("========================================");
     
     if !is_admin() {
@@ -141,13 +138,14 @@ fn main() {
         }
     };
     
-    logger.info("Step 4: Waiting for game to load...");
+    logger.info("Step 4: Waiting for game to load (5 seconds)...");
     thread::sleep(Duration::from_secs(5));
     
     logger.info("Step 5: Injecting client.dll...");
     match inject_dll(&mut game_process, &client_dll_path, &mut logger) {
         Ok(_) => {
             logger.success("Successfully injected client.dll!");
+            logger.info("The mod should now be active in game.");
         },
         Err(e) => {
             logger.error(&format!("Injection failed: {}", e));
@@ -156,7 +154,8 @@ fn main() {
     
     logger.info("========================================");
     logger.info("Launcher running. Log saved to launcher_debug.log");
-    logger.info("Press Ctrl+C to exit");
+    logger.info("The mod is active! You can now play.");
+    logger.info("Press Ctrl+C to exit this launcher");
     logger.info("========================================");
     
     loop {
@@ -173,6 +172,8 @@ fn main() {
             }
         }
     }
+    
+    logger.info("Launcher exiting...");
 }
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
@@ -207,7 +208,6 @@ fn is_admin() -> bool {
     }
 }
 
-// extern блок с unsafe
 unsafe extern "system" {
     fn OpenProcessToken(
         ProcessHandle: *mut c_void,
@@ -237,6 +237,7 @@ fn find_client_dll() -> Option<PathBuf> {
         PathBuf::from(".\\client.dll"),
         PathBuf::from("..\\target\\release\\client.dll"),
         PathBuf::from(".\\target\\release\\client.dll"),
+        PathBuf::from("..\\..\\target\\release\\client.dll"),
     ];
     
     for path in paths {
@@ -332,7 +333,7 @@ fn inject_dll(process: &mut Child, dll_path: &PathBuf, logger: &mut Logger) -> R
         }
         logger.success(&format!("LoadLibraryA at: {:p}", load_library_addr));
         
-        let mut thread_id = 0u32;  // ← Исправлено: добавлено mut
+        let mut thread_id = 0u32;
         let thread_handle = CreateRemoteThread(
             process_handle,
             std::ptr::null_mut(),
