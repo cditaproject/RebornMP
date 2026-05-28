@@ -17,7 +17,7 @@ winapi = { version = "0.3", features = [
     "libloaderapi",
     "winuser",
     "d3d11",
-    "dxgi"
+    "dxgi",
+    "d3dcommon"
 ] }
 lazy_static = "1.4.0"
-imgui = "0.11"
