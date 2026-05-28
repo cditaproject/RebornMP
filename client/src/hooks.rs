@@ -2,7 +2,8 @@
 // RebornMP Hooks Manager - DirectX Hooking
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use winapi::shared::minwindef::{HMODULE, TRUE, FALSE};
+//use winapi::shared::minwindef::{HMODULE, TRUE, FALSE};
+use winapi::shared::minwindef::HMODULE;
 use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::um::memoryapi::VirtualProtect;
 use winapi::um::winnt::PAGE_EXECUTE_READWRITE;
