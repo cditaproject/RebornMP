@@ -9,17 +9,15 @@ crate-type = ["cdylib"]
 [dependencies]
 winapi = { version = "0.3", features = [
     "winnt",
-    "processthreadsapi", 
-    "memoryapi",
+    "processthreadsapi",
+    "memoryapi", 
     "handleapi",
     "synchapi",
     "errhandlingapi",
     "libloaderapi",
-    "winuser",
-    "d3d11",
-    "d3d11_1",
-    "dxgi",
-    "dxgi1_2",
-    "d3dcommon"
+    "winuser"
 ] }
 lazy_static = "1.4.0"
+imgui = "0.11"
+imgui-winit-support = "0.11"
+winit = "0.29"
