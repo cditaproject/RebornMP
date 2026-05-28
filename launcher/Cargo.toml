@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 winapi = { version = "0.3", features = [
     "processenv",
-    "processthreadsapi", 
+    "processthreadsapi",
     "memoryapi",
     "handleapi",
     "synchapi",
@@ -16,6 +16,8 @@ winapi = { version = "0.3", features = [
     "minwindef",
     "errhandlingapi",
     "securitybaseapi",
-    "winerror"
+    "winerror",
+    "fileapi"
 ] }
 chrono = "0.4"
+winreg = "0.50"  # Для поиска GTA V в реестре
