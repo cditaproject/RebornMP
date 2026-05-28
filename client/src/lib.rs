@@ -17,10 +17,12 @@ mod network;
 mod ui;
 
 use network::NetworkClient;
+use ui::UIManager;
 use ui::CHAT;
 
 // Глобальные состояния
 static mut NETWORK_CLIENT: Option<Arc<Mutex<NetworkClient>>> = None;
+static mut UI_MANAGER: Option<Arc<Mutex<UIManager>>> = None;
 static mut GAME_READY: bool = false;
 
 // ========== DLL ENTRY POINT ==========
@@ -49,8 +51,14 @@ pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut 
     }
 }
 
+// ========== ИНИЦИАЛИЗАЦИЯ КЛИЕНТА ==========
 fn initialize_client() {
     println!("[RebornMP] Initializing client...");
+    
+    unsafe {
+        let ui = Arc::new(Mutex::new(UIManager::new()));
+        UI_MANAGER = Some(ui.clone());
+    }
     
     CHAT.add_message("========================================".to_string(), true);
     CHAT.add_message("   RebornMP - GTA V Multiplayer Mod    ".to_string(), true);
@@ -86,6 +94,7 @@ fn initialize_client() {
     }
 }
 
+// ========== ОСНОВНОЙ ЦИКЛ ==========
 fn start_main_loop() {
     println!("[RebornMP] Main loop started");
     
@@ -113,12 +122,17 @@ fn start_main_loop() {
                     handle_server_message(&msg);
                 }
             }
+            
+            if let Some(ui) = &UI_MANAGER {
+                ui.lock().unwrap().update();
+            }
         }
         
         thread::sleep(Duration::from_millis(50));
     }
 }
 
+// ========== ОБРАБОТКА СООБЩЕНИЙ ОТ СЕРВЕРА ==========
 fn handle_server_message(message: &str) {
     println!("[RebornMP] Server message: {}", message);
     
@@ -135,11 +149,22 @@ fn handle_server_message(message: &str) {
             CHAT.add_message(format!("💰 Your balance: ${}", money), true);
         }
     }
+    else if message.contains("\"type\":\"player_joined\"") {
+        if let Some(name) = extract_json_value(message, "name") {
+            CHAT.add_message(format!("🟢 {} joined the game", name), true);
+        }
+    }
+    else if message.contains("\"type\":\"player_left\"") {
+        if let Some(name) = extract_json_value(message, "name") {
+            CHAT.add_message(format!("🔴 {} left the game", name), true);
+        }
+    }
     else {
         CHAT.add_message(message.to_string(), true);
     }
 }
 
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 fn extract_json_value(json: &str, key: &str) -> Option<String> {
     let search = format!("\"{}\":\"", key);
     if let Some(start) = json.find(&search) {
@@ -148,6 +173,17 @@ fn extract_json_value(json: &str, key: &str) -> Option<String> {
             return Some(rest[..end].to_string());
         }
     }
+    
+    let search = format!("\"{}\":", key);
+    if let Some(start) = json.find(&search) {
+        let rest = &json[start + search.len()..];
+        let end = rest.find(',').or_else(|| rest.find('}')).unwrap_or(rest.len());
+        let value = rest[..end].trim();
+        if let Ok(num) = value.parse::<i32>() {
+            return Some(num.to_string());
+        }
+    }
+    
     None
 }
 
