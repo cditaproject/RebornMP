@@ -1,5 +1,5 @@
 // client/src/lib.rs
-// RebornMP Client - Full Version (DLL Entry Point + Chat + Network)
+// RebornMP Client - Full Version (DLL Entry Point + Chat + Network + ImGui)
 
 use std::ffi::c_void;
 use std::thread;
@@ -17,12 +17,11 @@ mod network;
 mod ui;
 
 use network::NetworkClient;
-use ui::UIManager;
 use ui::CHAT;
+use ui::UI;
 
 // Глобальные состояния
 static mut NETWORK_CLIENT: Option<Arc<Mutex<NetworkClient>>> = None;
-static mut UI_MANAGER: Option<Arc<Mutex<UIManager>>> = None;
 static mut GAME_READY: bool = false;
 
 // ========== DLL ENTRY POINT ==========
@@ -37,9 +36,8 @@ pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut 
             println!("[RebornMP] DLL attached to process (PID: {})", std::process::id());
             
             thread::spawn(|| {
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(2));
                 initialize_client();
-                ui::CHAT.find_game_window();
             });
             1
         }
@@ -56,10 +54,8 @@ pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut 
 fn initialize_client() {
     println!("[RebornMP] Initializing client...");
     
-    unsafe {
-        let ui = Arc::new(Mutex::new(UIManager::new()));
-        UI_MANAGER = Some(ui.clone());
-    }
+    // Инициализируем ImGui
+    UI.init_imgui();
     
     CHAT.add_message("========================================".to_string(), true);
     CHAT.add_message("   RebornMP - GTA V Multiplayer Mod    ".to_string(), true);
@@ -69,7 +65,7 @@ fn initialize_client() {
     // Устанавливаем хуки для DirectX
     if !hooks::install_hooks() {
         println!("[RebornMP] Failed to install hooks!");
-        CHAT.add_message("❌ Failed to install DirectX hooks! Chat may not display.".to_string(), true);
+        CHAT.add_message("❌ Failed to install hooks! Chat may not display.".to_string(), true);
     } else {
         println!("[RebornMP] Hooks installed successfully");
     }
@@ -123,13 +119,13 @@ fn start_main_loop() {
                     handle_server_message(&msg);
                 }
             }
-            
-            if let Some(ui) = &UI_MANAGER {
-                ui.lock().unwrap().update();
-            }
         }
         
-        thread::sleep(Duration::from_millis(50));
+        // Обработка ввода и рендер ImGui
+        hooks::process_input();
+        UI.render();
+        
+        thread::sleep(Duration::from_millis(16)); // ~60 FPS
     }
 }
 
