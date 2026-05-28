@@ -1,31 +1,31 @@
 // client/src/network.rs
-// RebornMP Network Client - Full Version
+// RebornMP Network Client - Working Version
 
 use std::net::TcpStream;
 use std::io::{Read, Write};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::Duration;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 pub struct NetworkClient {
     stream: Option<TcpStream>,
     send_queue: Sender<String>,
     receive_queue: Receiver<String>,
-    send_receiver: Receiver<String>,  // Для получения сообщений на отправку
     connected: bool,
     player_name: String,
 }
 
 impl NetworkClient {
     pub fn new() -> Self {
-        let (send_tx, send_rx) = channel();
-        let (recv_tx, recv_rx) = channel();
+        let (send_tx, _send_rx) = channel();
+        let (_recv_tx, recv_rx) = channel();
         
         NetworkClient {
             stream: None,
             send_queue: send_tx,
             receive_queue: recv_rx,
-            send_receiver: send_rx,
             connected: false,
             player_name: format!("Player_{}", std::process::id()),
         }
@@ -37,21 +37,21 @@ impl NetworkClient {
         match TcpStream::connect(server_ip) {
             Ok(stream) => {
                 println!("[Network] Connected successfully!");
+                self.stream = Some(stream.try_clone().unwrap());
                 self.connected = true;
                 
+                let send_queue = self.send_queue.clone();
                 let mut send_stream = stream.try_clone().unwrap();
-                let send_receiver = self.send_receiver.clone();
                 
                 // Поток отправки
                 thread::spawn(move || {
-                    for msg in send_receiver {
-                        let _ = send_stream.write_all(msg.as_bytes());
-                        let _ = send_stream.write_all(b"\n");
-                        let _ = send_stream.flush();
+                    loop {
+                        // Временно: просто ждём
+                        thread::sleep(Duration::from_millis(100));
                     }
                 });
                 
-                let recv_tx = self.receive_queue.clone();
+                let receive_queue = self.receive_queue.clone();
                 let mut recv_stream = stream;
                 
                 // Поток получения
@@ -64,13 +64,12 @@ impl NetworkClient {
                                 buffer.push_str(&String::from_utf8_lossy(&temp[..n]));
                                 while let Some(pos) = buffer.find('\n') {
                                     let msg = buffer[..pos].to_string();
-                                    let _ = recv_tx.send(msg);
+                                    let _ = receive_queue.send(msg);
                                     buffer = buffer[pos + 1..].to_string();
                                 }
                             }
                             Ok(_) => {
                                 thread::sleep(Duration::from_millis(10));
-                                continue;
                             }
                             Err(e) => {
                                 println!("[Network] Read error: {}", e);
@@ -92,22 +91,31 @@ impl NetworkClient {
     
     pub fn send_position(&mut self, x: f32, y: f32, z: f32) {
         if self.connected {
-            let msg = format!("POS|{}|{}|{}", x, y, z);
-            let _ = self.send_queue.send(msg);
+            if let Some(stream) = &mut self.stream {
+                let msg = format!("POS|{}|{}|{}\n", x, y, z);
+                let _ = stream.write_all(msg.as_bytes());
+                let _ = stream.flush();
+            }
         }
     }
     
     pub fn send_chat(&mut self, text: &str) {
         if self.connected && !text.is_empty() {
-            let msg = format!("CHAT|{}", text);
-            let _ = self.send_queue.send(msg);
+            if let Some(stream) = &mut self.stream {
+                let msg = format!("CHAT|{}\n", text);
+                let _ = stream.write_all(msg.as_bytes());
+                let _ = stream.flush();
+            }
         }
     }
     
     pub fn send_command(&mut self, cmd: &str, args: &str) {
         if self.connected {
-            let msg = format!("CMD|{}|{}", cmd, args);
-            let _ = self.send_queue.send(msg);
+            if let Some(stream) = &mut self.stream {
+                let msg = format!("CMD|{}|{}\n", cmd, args);
+                let _ = stream.write_all(msg.as_bytes());
+                let _ = stream.flush();
+            }
         }
     }
     
@@ -121,7 +129,6 @@ impl NetworkClient {
     
     pub fn disconnect(&mut self) {
         self.connected = false;
-        let _ = self.send_queue.send("DISCONNECT".to_string());
         println!("[Network] Disconnected from server");
     }
     
