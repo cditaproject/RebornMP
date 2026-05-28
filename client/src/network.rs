@@ -1,5 +1,5 @@
 // client/src/network.rs
-// RebornMP Network Client - Full Version
+// RebornMP Network Client - Full Version (TCP + WebSocket)
 
 use std::net::TcpStream;
 use std::io::{Read, Write};
@@ -43,9 +43,18 @@ impl NetworkClient {
                 
                 thread::spawn(move || {
                     for msg in send_tx {
-                        let _ = send_stream.write_all(msg.as_bytes());
-                        let _ = send_stream.write_all(b"\n");
-                        let _ = send_stream.flush();
+                        if let Err(e) = send_stream.write_all(msg.as_bytes()) {
+                            println!("[Network] Send error: {}", e);
+                            break;
+                        }
+                        if let Err(e) = send_stream.write_all(b"\n") {
+                            println!("[Network] Send newline error: {}", e);
+                            break;
+                        }
+                        if let Err(e) = send_stream.flush() {
+                            println!("[Network] Flush error: {}", e);
+                            break;
+                        }
                     }
                 });
                 
@@ -60,7 +69,9 @@ impl NetworkClient {
                                 buffer.push_str(&String::from_utf8_lossy(&temp[..n]));
                                 while let Some(pos) = buffer.find('\n') {
                                     let msg = buffer[..pos].to_string();
-                                    let _ = recv_tx.send(msg);
+                                    if let Err(e) = recv_tx.send(msg) {
+                                        println!("[Network] Receive queue error: {}", e);
+                                    }
                                     buffer = buffer[pos + 1..].to_string();
                                 }
                             }
@@ -68,7 +79,10 @@ impl NetworkClient {
                                 thread::sleep(Duration::from_millis(10));
                                 continue;
                             }
-                            Err(_) => break,
+                            Err(e) => {
+                                println!("[Network] Read error: {}", e);
+                                break;
+                            }
                         }
                     }
                 });
@@ -120,5 +134,13 @@ impl NetworkClient {
     
     pub fn is_connected(&self) -> bool {
         self.connected
+    }
+    
+    pub fn set_player_name(&mut self, name: &str) {
+        self.player_name = name.to_string();
+    }
+    
+    pub fn get_player_name(&self) -> &str {
+        &self.player_name
     }
 }
