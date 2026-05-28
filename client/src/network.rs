@@ -1,146 +1,97 @@
 // client/src/network.rs
-// RebornMP Network Client - Working Version
+// Максимально простая рабочая версия
 
 use std::net::TcpStream;
 use std::io::{Read, Write};
-use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::Duration;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 pub struct NetworkClient {
     stream: Option<TcpStream>,
-    send_queue: Sender<String>,
-    receive_queue: Receiver<String>,
+    message_receiver: Receiver<String>,
+    message_sender: Sender<String>,
     connected: bool,
-    player_name: String,
 }
 
 impl NetworkClient {
     pub fn new() -> Self {
-        let (send_tx, _send_rx) = channel();
-        let (_recv_tx, recv_rx) = channel();
-        
+        let (tx, rx) = channel();
         NetworkClient {
             stream: None,
-            send_queue: send_tx,
-            receive_queue: recv_rx,
+            message_receiver: rx,
+            message_sender: tx,
             connected: false,
-            player_name: format!("Player_{}", std::process::id()),
         }
     }
     
     pub fn connect(&mut self, server_ip: &str) -> bool {
-        println!("[Network] Connecting to {}...", server_ip);
-        
         match TcpStream::connect(server_ip) {
-            Ok(stream) => {
-                println!("[Network] Connected successfully!");
-                self.stream = Some(stream.try_clone().unwrap());
+            Ok(mut stream) => {
+                println!("[Network] Connected to {}", server_ip);
                 self.connected = true;
                 
-                let send_queue = self.send_queue.clone();
-                let mut send_stream = stream.try_clone().unwrap();
+                let tx = self.message_sender.clone();
                 
-                // Поток отправки
+                // Поток чтения
                 thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
                     loop {
-                        // Временно: просто ждём
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                });
-                
-                let receive_queue = self.receive_queue.clone();
-                let mut recv_stream = stream;
-                
-                // Поток получения
-                thread::spawn(move || {
-                    let mut buffer = String::new();
-                    let mut temp = [0u8; 4096];
-                    loop {
-                        match recv_stream.read(&mut temp) {
+                        match stream.read(&mut buf) {
                             Ok(n) if n > 0 => {
-                                buffer.push_str(&String::from_utf8_lossy(&temp[..n]));
-                                while let Some(pos) = buffer.find('\n') {
-                                    let msg = buffer[..pos].to_string();
-                                    let _ = receive_queue.send(msg);
-                                    buffer = buffer[pos + 1..].to_string();
-                                }
+                                let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+                                let _ = tx.send(msg);
                             }
-                            Ok(_) => {
-                                thread::sleep(Duration::from_millis(10));
-                            }
-                            Err(e) => {
-                                println!("[Network] Read error: {}", e);
-                                break;
-                            }
+                            Ok(_) => thread::sleep(Duration::from_millis(10)),
+                            Err(_) => break,
                         }
                     }
                 });
                 
+                self.stream = Some(stream);
                 true
             }
             Err(e) => {
-                println!("[Network] Connection failed: {}", e);
-                self.connected = false;
+                println!("[Network] Connect error: {}", e);
                 false
             }
         }
     }
     
     pub fn send_position(&mut self, x: f32, y: f32, z: f32) {
-        if self.connected {
-            if let Some(stream) = &mut self.stream {
-                let msg = format!("POS|{}|{}|{}\n", x, y, z);
-                let _ = stream.write_all(msg.as_bytes());
-                let _ = stream.flush();
-            }
-        }
+        self.send(&format!("POS|{}|{}|{}", x, y, z));
     }
     
     pub fn send_chat(&mut self, text: &str) {
-        if self.connected && !text.is_empty() {
-            if let Some(stream) = &mut self.stream {
-                let msg = format!("CHAT|{}\n", text);
-                let _ = stream.write_all(msg.as_bytes());
-                let _ = stream.flush();
-            }
-        }
+        self.send(&format!("CHAT|{}", text));
     }
     
     pub fn send_command(&mut self, cmd: &str, args: &str) {
-        if self.connected {
-            if let Some(stream) = &mut self.stream {
-                let msg = format!("CMD|{}|{}\n", cmd, args);
-                let _ = stream.write_all(msg.as_bytes());
-                let _ = stream.flush();
-            }
+        self.send(&format!("CMD|{}|{}", cmd, args));
+    }
+    
+    fn send(&mut self, msg: &str) {
+        if let Some(stream) = &mut self.stream {
+            let _ = stream.write_all(msg.as_bytes());
+            let _ = stream.write_all(b"\n");
+            let _ = stream.flush();
         }
     }
     
     pub fn receive_messages(&mut self) -> Vec<String> {
-        let mut messages = Vec::new();
-        while let Ok(msg) = self.receive_queue.try_recv() {
-            messages.push(msg);
+        let mut msgs = Vec::new();
+        while let Ok(msg) = self.message_receiver.try_recv() {
+            msgs.push(msg);
         }
-        messages
+        msgs
     }
     
     pub fn disconnect(&mut self) {
         self.connected = false;
-        println!("[Network] Disconnected from server");
+        self.stream = None;
     }
     
     pub fn is_connected(&self) -> bool {
         self.connected
-    }
-    
-    pub fn set_player_name(&mut self, name: &str) {
-        self.player_name = name.to_string();
-    }
-    
-    pub fn get_player_name(&self) -> &str {
-        &self.player_name
     }
 }
