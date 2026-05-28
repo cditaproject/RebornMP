@@ -1,13 +1,14 @@
 // client/src/lib.rs
+// RebornMP Client - С чатом поверх игры!
 
 use std::ffi::c_void;
 use std::thread;
 use std::time::Duration;
-use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
+use winapi::um::winnt::DLL_PROCESS_ATTACH;
 
 mod ui;
 mod hooks;
-mod network;
+mod overlay;
 
 use ui::CHAT;
 
@@ -18,8 +19,10 @@ pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut
             thread::spawn(|| {
                 thread::sleep(Duration::from_secs(2));
                 
-                CHAT.find_game_window();
-                CHAT.add_message("RebornMP Loaded! Press T to chat".to_string(), true);
+                CHAT.add_message("========================================".to_string(), true);
+                CHAT.add_message("   RebornMP - GTA V Multiplayer Mod    ".to_string(), true);
+                CHAT.add_message("========================================".to_string(), true);
+                CHAT.add_message("Press T to open chat".to_string(), true);
                 
                 hooks::install_hooks();
                 
