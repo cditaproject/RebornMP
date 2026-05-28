@@ -8,7 +8,7 @@ use winapi::um::winuser::GetAsyncKeyState;
 
 mod webview_chat;
 
-use webview_chat::{init_webview, add_message, show_chat, hide_chat, is_ready};
+use webview_chat::{init_webview, add_message, show_chat, hide_chat};
 
 #[no_mangle]
 pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut c_void) -> u32 {
