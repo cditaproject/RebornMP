@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 use winapi::um::libloaderapi::DisableThreadLibraryCalls;
+use winapi::shared::minwindef::HMODULE;
 
 mod hooks;
 mod memory;
@@ -16,12 +17,10 @@ mod network;
 mod ui;
 
 use network::NetworkClient;
-use ui::UIManager;
 use ui::CHAT;
 
 // Глобальные состояния
 static mut NETWORK_CLIENT: Option<Arc<Mutex<NetworkClient>>> = None;
-static mut UI_MANAGER: Option<Arc<Mutex<UIManager>>> = None;
 static mut GAME_READY: bool = false;
 
 // ========== DLL ENTRY POINT ==========
@@ -29,16 +28,13 @@ static mut GAME_READY: bool = false;
 pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut c_void) -> u32 {
     match reason {
         DLL_PROCESS_ATTACH => {
-            // Отключаем вызовы при выгрузке DLL для оптимизации
             unsafe {
-                DisableThreadLibraryCalls(hinst);
+                DisableThreadLibraryCalls(hinst as HMODULE);
             }
             
             println!("[RebornMP] DLL attached to process (PID: {})", std::process::id());
             
-            // Запускаем клиент в отдельном потоке
             thread::spawn(|| {
-                // Ждём загрузки игры
                 thread::sleep(Duration::from_secs(3));
                 initialize_client();
             });
@@ -53,17 +49,9 @@ pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut 
     }
 }
 
-// ========== ИНИЦИАЛИЗАЦИЯ КЛИЕНТА ==========
 fn initialize_client() {
     println!("[RebornMP] Initializing client...");
     
-    // Инициализируем UI
-    unsafe {
-        let ui = Arc::new(Mutex::new(UIManager::new()));
-        UI_MANAGER = Some(ui.clone());
-    }
-    
-    // Добавляем приветственное сообщение
     CHAT.add_message("========================================".to_string(), true);
     CHAT.add_message("   RebornMP - GTA V Multiplayer Mod    ".to_string(), true);
     CHAT.add_message("========================================".to_string(), true);
@@ -77,7 +65,6 @@ fn initialize_client() {
         println!("[RebornMP] Hooks installed successfully");
     }
     
-    // Подключаемся к серверу
     unsafe {
         let network = Arc::new(Mutex::new(NetworkClient::new()));
         NETWORK_CLIENT = Some(network.clone());
@@ -90,7 +77,6 @@ fn initialize_client() {
             CHAT.add_message("💬 Type /help for list of commands".to_string(), true);
             CHAT.add_message("📌 Press T to open chat".to_string(), true);
             
-            // Запускаем основной цикл
             start_main_loop();
         } else {
             CHAT.add_message("❌ Failed to connect to server!".to_string(), true);
@@ -100,13 +86,11 @@ fn initialize_client() {
     }
 }
 
-// ========== ОСНОВНОЙ ЦИКЛ ==========
 fn start_main_loop() {
     println!("[RebornMP] Main loop started");
     
     loop {
         unsafe {
-            // Получаем позицию игрока из памяти (если игра загружена)
             if !GAME_READY {
                 if let Some(pos) = memory::get_player_position() {
                     GAME_READY = true;
@@ -115,7 +99,6 @@ fn start_main_loop() {
                 }
             }
             
-            // Отправляем позицию на сервер (для синхронизации)
             if GAME_READY {
                 if let Some(net) = &NETWORK_CLIENT {
                     if let Some(pos) = memory::get_player_position() {
@@ -124,29 +107,21 @@ fn start_main_loop() {
                 }
             }
             
-            // Получаем сообщения от сервера
             if let Some(net) = &NETWORK_CLIENT {
                 let messages = net.lock().unwrap().receive_messages();
                 for msg in messages {
                     handle_server_message(&msg);
                 }
             }
-            
-            // Обновляем UI (рендерим чат)
-            if let Some(ui) = &UI_MANAGER {
-                ui.lock().unwrap().update();
-            }
         }
         
-        thread::sleep(Duration::from_millis(50)); // 20 FPS
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
-// ========== ОБРАБОТКА СООБЩЕНИЙ ОТ СЕРВЕРА ==========
 fn handle_server_message(message: &str) {
     println!("[RebornMP] Server message: {}", message);
     
-    // Парсим JSON сообщения от сервера
     if message.contains("\"type\":\"chat\"") {
         if let Some(text) = extract_json_value(message, "message") {
             CHAT.add_message(text, false);
@@ -160,25 +135,12 @@ fn handle_server_message(message: &str) {
             CHAT.add_message(format!("💰 Your balance: ${}", money), true);
         }
     }
-    else if message.contains("\"type\":\"player_joined\"") {
-        if let Some(name) = extract_json_value(message, "name") {
-            CHAT.add_message(format!("🟢 {} joined the game", name), true);
-        }
-    }
-    else if message.contains("\"type\":\"player_left\"") {
-        if let Some(name) = extract_json_value(message, "name") {
-            CHAT.add_message(format!("🔴 {} left the game", name), true);
-        }
-    }
     else {
-        // Неизвестный тип сообщения, показываем как есть
         CHAT.add_message(message.to_string(), true);
     }
 }
 
-// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 fn extract_json_value(json: &str, key: &str) -> Option<String> {
-    // Ищем строковое значение: "key":"value"
     let search = format!("\"{}\":\"", key);
     if let Some(start) = json.find(&search) {
         let rest = &json[start + search.len()..];
@@ -186,16 +148,6 @@ fn extract_json_value(json: &str, key: &str) -> Option<String> {
             return Some(rest[..end].to_string());
         }
     }
-    
-    // Ищем числовое значение: "key":123
-    let search = format!("\"{}\":", key);
-    if let Some(start) = json.find(&search) {
-        let rest = &json[start + search.len()..];
-        let end = rest.find(',').or_else(|| rest.find('}')).unwrap_or(rest.len());
-        let value = rest[..end].trim();
-        return Some(value.to_string());
-    }
-    
     None
 }
 
