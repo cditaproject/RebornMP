@@ -16,8 +16,6 @@ winapi = { version = "0.3", features = [
     "errhandlingapi",
     "libloaderapi",
     "winuser",
-    "d3d11",
-    "dxgi",
-    "d3dcommon"
+    "wingdi"
 ] }
 lazy_static = "1.4.0"
