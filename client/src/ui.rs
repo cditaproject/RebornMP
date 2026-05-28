@@ -1,12 +1,11 @@
 // client/src/ui.rs
-// RebornMP UI Manager - With WebView2
+// RebornMP UI Manager - ImGui Version (Working)
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use lazy_static::lazy_static;
-use webview2::Controller;
-use windows::Win32::Foundation::HWND;
+use imgui::{Context, Window};
 
 #[derive(Clone)]
 pub struct ChatMessage {
@@ -19,9 +18,7 @@ pub struct ChatManager {
     messages: Mutex<VecDeque<ChatMessage>>,
     input_buffer: Mutex<String>,
     is_open: Mutex<bool>,
-    console_mode: Mutex<bool>,
     max_messages: usize,
-    webview: Mutex<Option<Controller>>,
 }
 
 impl ChatManager {
@@ -30,50 +27,8 @@ impl ChatManager {
             messages: Mutex::new(VecDeque::with_capacity(100)),
             input_buffer: Mutex::new(String::new()),
             is_open: Mutex::new(false),
-            console_mode: Mutex::new(true),
             max_messages: 50,
-            webview: Mutex::new(None),
         }
-    }
-    
-    pub fn init_webview(&self, parent_hwnd: isize) -> Result<(), String> {
-        let hwnd = HWND(parent_hwnd as *mut _);
-        
-        // Создаём среду WebView2
-        let env = webview2::Environment::create(None, |_env| Ok(()))
-            .map_err(|e| format!("Failed to create env: {:?}", e))?;
-        
-        // Создаём контроллер
-        let controller = env.create_controller(hwnd, None)
-            .map_err(|e| format!("Failed to create controller: {:?}", e))?;
-        
-        // Простой HTML для чата
-        let html = r#"
-        <html><body style='background:transparent; color:white; font-family:Arial; margin:0; padding:0;'>
-        <div id='chat' style='position:fixed; bottom:20px; left:20px; width:400px; max-height:300px; overflow-y:auto;'></div>
-        <script>
-            window.addMessage = function(text, isSystem) {
-                let div = document.getElementById('chat');
-                let msg = document.createElement('div');
-                msg.style.background = 'rgba(0,0,0,0.7)';
-                msg.style.padding = '5px';
-                msg.style.margin = '2px';
-                msg.style.borderRadius = '5px';
-                msg.style.color = isSystem ? '#ffaa00' : '#00ff00';
-                msg.innerText = text;
-                div.appendChild(msg);
-                div.scrollTop = div.scrollHeight;
-            };
-        </script>
-        </body></html>
-        "#;
-        
-        controller.navigate_to_html(html)
-            .map_err(|e| format!("Failed to load HTML: {:?}", e))?;
-        
-        *self.webview.lock().unwrap() = Some(controller);
-        println!("[UI] WebView2 initialized!");
-        Ok(())
     }
     
     pub fn add_message(&self, text: String, is_system: bool) {
@@ -91,15 +46,6 @@ impl ChatManager {
         
         let prefix = if is_system { "[SYSTEM]" } else { "[CHAT]" };
         println!("{} {}", prefix, text);
-        
-        // Отправляем в WebView если есть
-        if let Some(webview) = self.webview.lock().unwrap().as_ref() {
-            let js = format!("window.addMessage('{}', {})", 
-                text.replace("'", "\\'"),
-                if is_system { "true" } else { "false" }
-            );
-            let _ = webview.execute_script(&js);
-        }
     }
     
     pub fn get_messages(&self) -> Vec<ChatMessage> {
@@ -123,20 +69,6 @@ impl ChatManager {
         self.input_buffer.lock().unwrap().clone()
     }
     
-    pub fn add_char(&self, c: char) {
-        if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.push(c);
-        }
-    }
-    
-    pub fn backspace(&self) {
-        if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.pop();
-        }
-    }
-    
     pub fn send_message(&self) -> Option<String> {
         if *self.is_open.lock().unwrap() {
             let mut buffer = self.input_buffer.lock().unwrap();
@@ -156,44 +88,77 @@ impl ChatManager {
         messages.clear();
     }
     
-    pub fn set_console_mode(&self, enabled: bool) {
-        *self.console_mode.lock().unwrap() = enabled;
-    }
-    
-    pub fn render(&self) {
-        if *self.console_mode.lock().unwrap() {
-            print!("\r\x1B[2J\x1B[1;1H");
-            println!("=== RebornMP Chat ===");
-            println!("----------------------------------------");
+    pub fn render_imgui(&self, ui: &imgui::Ui) {
+        // Окно чата
+        if *self.is_open.lock().unwrap() {
+            let mut input_text = self.get_input_text();
             
-            let messages = self.get_messages();
-            let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
-            for msg in &messages[start..] {
-                let prefix = if msg.is_system { "🔧" } else { "💬" };
-                println!("{} {}", prefix, msg.text);
-            }
+            Window::new(im_str("Chat Input"))
+                .size([400.0, 100.0], imgui::Condition::FirstUseEver)
+                .build(ui, || {
+                    ui.input_text(im_str("##chat_input"), &mut input_text)
+                        .build();
+                    
+                    if ui.button(im_str("Send"), [100.0, 30.0]) {
+                        if !input_text.is_empty() {
+                            let msg = input_text.clone();
+                            *self.input_buffer.lock().unwrap() = msg.clone();
+                            if let Some(msg) = self.send_message() {
+                                if let Some(net) = unsafe { &crate::NETWORK_CLIENT } {
+                                    net.lock().unwrap().send_chat(&msg);
+                                }
+                            }
+                        }
+                    }
+                    
+                    ui.same_line();
+                    
+                    if ui.button(im_str("Close"), [100.0, 30.0]) {
+                        self.toggle_input();
+                    }
+                });
             
-            if self.is_input_open() {
-                println!("\n> {}", self.get_input_text());
-            }
+            *self.input_buffer.lock().unwrap() = input_text;
         }
+        
+        // HUD сообщений
+        Window::new(im_str("Chat History"))
+            .size([400.0, 300.0], imgui::Condition::FirstUseEver)
+            .position([20.0, 20.0], imgui::Condition::FirstUseEver)
+            .build(ui, || {
+                let messages = self.get_messages();
+                let start = if messages.len() > 10 { messages.len() - 10 } else { 0 };
+                
+                for msg in &messages[start..] {
+                    let color = if msg.is_system { [1.0, 0.8, 0.2, 1.0] } else { [0.2, 1.0, 0.2, 1.0] };
+                    ui.text_colored(color, &msg.text);
+                }
+            });
     }
 }
 
-// ========== ОСНОВНОЙ UI МЕНЕДЖЕР ==========
 pub struct UIManager {
-    show_hud: Mutex<bool>,
-    show_debug: Mutex<bool>,
+    imgui_context: Mutex<Option<Context>>,
     last_render: Mutex<u64>,
 }
 
 impl UIManager {
     pub fn new() -> Self {
-        println!("[UI] UIManager initialized");
+        println!("[UI] UIManager initialized (ImGui Mode)");
+        
+        let mut ctx = Context::create();
+        ctx.fonts().add_default_font();
+        
         UIManager {
-            show_hud: Mutex::new(true),
-            show_debug: Mutex::new(false),
+            imgui_context: Mutex::new(Some(ctx)),
             last_render: Mutex::new(0),
+        }
+    }
+    
+    pub fn render(&self) {
+        if let Some(ctx) = self.imgui_context.lock().unwrap().as_mut() {
+            let ui = ctx.frame();
+            CHAT.render_imgui(&ui);
         }
     }
     
@@ -204,9 +169,9 @@ impl UIManager {
             .as_secs();
         
         let mut last = self.last_render.lock().unwrap();
-        if now - *last > 1 {
+        if now - *last > 0 {
             *last = now;
-            CHAT.render();
+            self.render();
         }
     }
     
@@ -215,9 +180,9 @@ impl UIManager {
     }
 }
 
-// ========== ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР ==========
 lazy_static! {
     pub static ref CHAT: ChatManager = ChatManager::new();
+    pub static ref UI: UIManager = UIManager::new();
 }
 
 pub fn add_chat_message(text: String, is_system: bool) {
