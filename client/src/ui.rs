@@ -1,5 +1,5 @@
 // client/src/ui.rs
-// RebornMP UI Manager - Full Version
+// RebornMP UI Manager - Full Version (Chat + HUD + DirectX)
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lazy_static::lazy_static;
 
+// ========== СТРУКТУРА СООБЩЕНИЯ ЧАТА ==========
 #[derive(Clone)]
 pub struct ChatMessage {
     pub text: String,
@@ -14,6 +15,7 @@ pub struct ChatMessage {
     pub is_system: bool,
 }
 
+// ========== МЕНЕДЖЕР ЧАТА ==========
 pub struct ChatManager {
     messages: Mutex<VecDeque<ChatMessage>>,
     input_buffer: Mutex<String>,
@@ -111,20 +113,22 @@ impl ChatManager {
     pub fn set_console_mode(&self, enabled: bool) {
         *self.console_mode.lock().unwrap() = enabled;
         if enabled {
-            println!("[UI] Console mode enabled");
+            println!("[UI] Console mode enabled - chat will appear in console");
         }
     }
     
     fn render_console(&self) {
         print!("\r\x1B[2J\x1B[1;1H");
         println!("=== RebornMP Chat (Console Mode) ===");
+        println!("Type messages below. Press Enter to send.");
         println!("----------------------------------------");
         
         let messages = self.get_messages();
         let start = if messages.len() > 10 { messages.len() - 10 } else { 0 };
         for msg in &messages[start..] {
+            let time = msg.timestamp % 86400;
             let prefix = if msg.is_system { "🔧" } else { "💬" };
-            println!("{} {}", prefix, msg.text);
+            println!("[{}] {} {}", time, prefix, msg.text);
         }
         
         if self.is_input_open() {
@@ -139,6 +143,54 @@ impl ChatManager {
     }
 }
 
+// ========== ОСНОВНОЙ UI МЕНЕДЖЕР ==========
+pub struct UIManager {
+    show_hud: Mutex<bool>,
+    show_debug: Mutex<bool>,
+    last_render: Mutex<u64>,
+}
+
+impl UIManager {
+    pub fn new() -> Self {
+        println!("[UI] UIManager initialized");
+        UIManager {
+            show_hud: Mutex::new(true),
+            show_debug: Mutex::new(false),
+            last_render: Mutex::new(0),
+        }
+    }
+    
+    pub fn update(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let mut last = self.last_render.lock().unwrap();
+        if now - *last > 1 {
+            *last = now;
+            CHAT.render();
+        }
+    }
+    
+    pub fn show_hud(&self, visible: bool) {
+        let mut hud = self.show_hud.lock().unwrap();
+        *hud = visible;
+    }
+    
+    pub fn toggle_debug(&self) {
+        let mut debug = self.show_debug.lock().unwrap();
+        *debug = !*debug;
+        let status = if *debug { "on" } else { "off" };
+        CHAT.add_message(format!("🔧 Debug mode: {}", status), true);
+    }
+    
+    pub fn add_chat_message(&self, text: &str, is_system: bool) {
+        CHAT.add_message(text.to_string(), is_system);
+    }
+}
+
+// ========== ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР ==========
 lazy_static! {
     pub static ref CHAT: ChatManager = ChatManager::new();
 }
