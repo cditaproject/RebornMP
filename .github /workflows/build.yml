@@ -1,0 +1,63 @@
+name: Build EntityMP
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-all:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Build Client DLL
+        run: cargo build --release --manifest-path client/Cargo.toml
+      
+      - name: Build Launcher
+        run: cargo build --release --manifest-path launcher/Cargo.toml
+      
+      - name: Build Shared Library
+        run: cargo build --release --manifest-path shared/Cargo.toml
+      
+      - name: Build SDK Library
+        run: cargo build --release --manifest-path sdk/Cargo.toml
+      
+      - name: Build Server Core
+        run: cargo build --release --manifest-path server/core/Cargo.toml
+      
+      - name: Upload Client DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dll
+          path: client/target/release/client.dll
+      
+      - name: Upload Launcher
+        uses: actions/upload-artifact@v4
+        with:
+          name: entitymp-launcher
+          path: launcher/target/release/entitymp-launcher.exe
+      
+      - name: Upload Shared Library
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-lib
+          path: shared/target/release/entitymp_shared.lib
+      
+      - name: Upload SDK Library
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-lib
+          path: sdk/target/release/entitymp_sdk.lib
+      
+      - name: Upload Server Core
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-core-lib
+          path: server/core/target/release/entitymp_server_core.lib
