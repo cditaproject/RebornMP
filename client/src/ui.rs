@@ -198,3 +198,55 @@ lazy_static! {
 pub fn add_chat_message(text: String, is_system: bool) {
     CHAT.add_message(text, is_system);
 }
+// Добавить в конец файла
+
+use webview2::Controller;
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+pub struct WebViewUI {
+    controller: Option<Controller>,
+    is_visible: bool,
+}
+
+impl WebViewUI {
+    pub fn new(parent_hwnd: HWND) -> Result<Self, String> {
+        let env = webview2::Environment::create(None, |env| Ok(())).unwrap();
+        let controller = env.create_controller(parent_hwnd, None).unwrap();
+        
+        controller.set_visible(false).unwrap();
+        
+        let html = include_str!("../ui/index.html");
+        controller.navigate_to_html(html).unwrap();
+        
+        Ok(WebViewUI {
+            controller: Some(controller),
+            is_visible: false,
+        })
+    }
+    
+    pub fn show_chat(&mut self) {
+        if let Some(c) = &self.controller {
+            let _ = c.set_visible(true);
+            self.is_visible = true;
+            // Выполнить JS для показа ввода
+            let _ = c.execute_script("window.reborn.showInput()");
+        }
+    }
+    
+    pub fn hide_chat(&mut self) {
+        if let Some(c) = &self.controller {
+            let _ = c.set_visible(false);
+            self.is_visible = false;
+        }
+    }
+    
+    pub fn add_message(&self, text: &str, is_system: bool) {
+        if let Some(c) = &self.controller {
+            let js = format!("window.reborn.addMessage('{}', {})", 
+                text.replace("'", "\\'"), 
+                if is_system { "true" } else { "false" }
+            );
+            let _ = c.execute_script(&js);
+        }
+    }
+}
