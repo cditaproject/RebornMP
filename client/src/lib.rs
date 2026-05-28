@@ -39,6 +39,7 @@ pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut 
             thread::spawn(|| {
                 thread::sleep(Duration::from_secs(3));
                 initialize_client();
+                ui::CHAT.find_game_window();
             });
             1
         }
