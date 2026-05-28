@@ -1,9 +1,7 @@
 // client/src/hooks.rs
-// RebornMP Hooks Manager - DirectX Hooking
+// RebornMP Hooks Manager
 
 use std::sync::atomic::{AtomicBool, Ordering};
-//use winapi::shared::minwindef::{HMODULE, TRUE, FALSE};
-use winapi::shared::minwindef::HMODULE;
 use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::um::memoryapi::VirtualProtect;
 use winapi::um::winnt::PAGE_EXECUTE_READWRITE;
@@ -27,11 +25,11 @@ fn handle_keyboard() {
             if GetAsyncKeyState(VK_RETURN) & 1 != 0 {
                 if let Some(msg) = crate::ui::CHAT.send_message() {
                     if msg.starts_with('/') {
-                        if let Some(net) = unsafe { &crate::NETWORK_CLIENT } {
+                        if let Some(net) = &crate::NETWORK_CLIENT {
                             let _ = net.lock().unwrap().send_command(&msg[1..], "");
                         }
                     } else {
-                        if let Some(net) = unsafe { &crate::NETWORK_CLIENT } {
+                        if let Some(net) = &crate::NETWORK_CLIENT {
                             net.lock().unwrap().send_chat(&msg);
                         }
                     }
@@ -59,10 +57,9 @@ fn find_present_address() -> Option<*mut c_void> {
     unsafe {
         let dxgi_dll = GetModuleHandleA(b"dxgi.dll\0".as_ptr() as *const i8);
         if dxgi_dll.is_null() {
-            println!("[Hooks] Failed to get dxgi.dll handle");
+            println!("[Hooks] Failed to get dxgi.dll");
             return None;
         }
-        
         println!("[Hooks] dxgi.dll found at {:p}", dxgi_dll);
         Some(dxgi_dll as *mut c_void)
     }
@@ -87,17 +84,16 @@ unsafe fn install_jmp_hook(target: *mut c_void, hook: *mut c_void) -> bool {
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), target as *mut u8, bytes.len());
     
     VirtualProtect(target as *mut _, 14, old_protect, &mut old_protect);
-    println!("[Hooks] JMP hook installed at {:p}", target);
+    println!("[Hooks] Hook installed at {:p}", target);
     true
 }
 
 pub fn install_hooks() -> bool {
     if HOOKS_INSTALLED.load(Ordering::SeqCst) {
-        println!("[Hooks] Hooks already installed");
         return true;
     }
     
-    println!("[Hooks] Installing DirectX hooks...");
+    println!("[Hooks] Installing hooks...");
     
     unsafe {
         if let Some(present_addr) = find_present_address() {
@@ -105,14 +101,14 @@ pub fn install_hooks() -> bool {
             
             if install_jmp_hook(present_addr, hk_present as *mut c_void) {
                 HOOKS_INSTALLED.store(true, Ordering::SeqCst);
-                println!("[Hooks] DirectX hook installed successfully!");
+                println!("[Hooks] Hook installed!");
                 crate::ui::CHAT.set_console_mode(false);
                 return true;
             }
         }
     }
     
-    println!("[Hooks] DirectX hook failed, using console mode");
+    println!("[Hooks] Hook failed, using console mode");
     crate::ui::CHAT.set_console_mode(true);
     true
 }
@@ -121,7 +117,6 @@ pub fn remove_hooks() {
     if !HOOKS_INSTALLED.load(Ordering::SeqCst) {
         return;
     }
-    
     println!("[Hooks] Removing hooks...");
     HOOKS_INSTALLED.store(false, Ordering::SeqCst);
 }
