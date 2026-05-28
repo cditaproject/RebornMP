@@ -7,7 +7,7 @@ use winapi::um::winnt::DLL_PROCESS_ATTACH;
 
 mod ui;
 mod hooks;
-mod overlay;
+mod webview2_bridge;
 
 use ui::CHAT;
 
@@ -18,16 +18,16 @@ pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut
             thread::spawn(|| {
                 thread::sleep(Duration::from_secs(2));
                 
-                CHAT.add_message("========================================".to_string(), true);
-                CHAT.add_message("   RebornMP - GTA V Multiplayer Mod    ".to_string(), true);
-                CHAT.add_message("========================================".to_string(), true);
-                CHAT.add_message("Press T to open chat".to_string(), true);
-                
-                hooks::install_hooks();
+                CHAT.add_message("RebornMP Loaded! Press T to chat".to_string(), true);
+                CHAT.add_message("WebView2 чат готов к работе!".to_string(), true);
                 
                 loop {
-                    hooks::process_input();
-                    CHAT.render();
+                    // Обработка клавиш
+                    unsafe {
+                        if winapi::um::winuser::GetAsyncKeyState(0x54) & 1 != 0 { // VK_T
+                            CHAT.toggle_input();
+                        }
+                    }
                     thread::sleep(Duration::from_millis(50));
                 }
             });
