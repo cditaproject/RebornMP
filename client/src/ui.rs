@@ -1,5 +1,5 @@
 // client/src/ui.rs
-// RebornMP UI Manager - С чатом поверх игры!
+// RebornMP UI Manager
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -19,7 +19,6 @@ pub struct ChatManager {
     messages: Mutex<VecDeque<ChatMessage>>,
     input_buffer: Mutex<String>,
     is_open: Mutex<bool>,
-    overlay: SimpleOverlay,
 }
 
 impl ChatManager {
@@ -31,7 +30,6 @@ impl ChatManager {
             messages: Mutex::new(VecDeque::with_capacity(100)),
             input_buffer: Mutex::new(String::new()),
             is_open: Mutex::new(false),
-            overlay,
         }
     }
     
@@ -99,11 +97,13 @@ impl ChatManager {
     }
     
     pub fn render(&self) {
-        // Очищаем область чата
-        self.overlay.clear_area(10, 50, 400, 400);
+        let overlay = SimpleOverlay::new();
         
-        // Рисуем фон чата (полупрозрачный чёрный)
-        self.overlay.rect(10, 50, 400, 350, RGB(0, 0, 0));
+        // Очищаем область чата
+        overlay.clear_area(10, 50, 400, 400);
+        
+        // Рисуем фон чата
+        overlay.rect(10, 50, 400, 350, RGB(0, 0, 0));
         
         let messages = self.messages.lock().unwrap();
         let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
@@ -111,22 +111,21 @@ impl ChatManager {
         let mut y = 70;
         for msg in messages.iter().skip(start) {
             let color = if msg.is_system {
-                RGB(255, 200, 100)  // Жёлтый для системы
+                RGB(255, 200, 100)
             } else {
-                RGB(100, 255, 100)  // Зелёный для игроков
+                RGB(100, 255, 100)
             };
             
             let prefix = if msg.is_system { "[SYS]" } else { "[CHAT]" };
             let text = format!("{} {}", prefix, msg.text);
-            self.overlay.text(&text, 20, y, color);
+            overlay.text(&text, 20, y, color);
             y += 22;
         }
         
         if *self.is_open.lock().unwrap() {
             let input = self.get_input_text();
-            // Рисуем поле ввода
-            self.overlay.rect(10, y + 10, 400, 35, RGB(40, 40, 40));
-            self.overlay.text(&format!("> {}", input), 20, y + 20, RGB(255, 255, 255));
+            overlay.rect(10, y + 10, 400, 35, RGB(40, 40, 40));
+            overlay.text(&format!("> {}", input), 20, y + 20, RGB(255, 255, 255));
         }
     }
     
