@@ -1,91 +1,181 @@
-#![allow(non_snake_case)]
-
-mod network;
-mod chat;
-mod hooks;
+// client/src/lib.rs
+// RebornMP Client - Full Version (DLL Entry Point + Chat + Network)
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use winapi::shared::minwindef::HINSTANCE;
-use winapi::um::libloaderapi::DisableThreadLibraryCalls;
-use winapi::um::winuser::{MessageBoxA, MB_OK, MB_ICONINFORMATION};
+use std::sync::Arc;
+use std::sync::Mutex;
 
-static RUNNING: AtomicBool = AtomicBool::new(true);
-static CHAT_INSTANCE: Mutex<Option<chat::Chat>> = Mutex::new(None);
+use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 
+mod hooks;
+mod memory;
+mod network;
+mod ui;
+
+use network::NetworkClient;
+use ui::UIManager;
+use ui::CHAT;
+
+// Глобальные состояния
+static mut NETWORK_CLIENT: Option<Arc<Mutex<NetworkClient>>> = None;
+static mut UI_MANAGER: Option<Arc<Mutex<UIManager>>> = None;
+static mut GAME_READY: bool = false;
+
+// ========== DLL ENTRY POINT ==========
 #[no_mangle]
-pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> bool {
+pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut c_void) -> u32 {
     match reason {
-        1 => {
-            unsafe { DisableThreadLibraryCalls(module); }
+        DLL_PROCESS_ATTACH => {
+            println!("[RebornMP] DLL attached to process");
             
+            // Запускаем клиент в отдельном потоке
             thread::spawn(|| {
-                thread::sleep(Duration::from_secs(5));
-                
-                unsafe {
-                    MessageBoxA(
-                        std::ptr::null_mut(),
-                        "Freemode-MP Client Injected!\n\nPress T to open chat\0".as_ptr() as _,
-                        "Freemode-MP\0".as_ptr() as _,
-                        MB_OK | MB_ICONINFORMATION,
-                    );
-                }
-                
-                *CHAT_INSTANCE.lock().unwrap() = Some(chat::Chat::new());
-                network::start_client();
-                
-                let mut last_t_state = false;
-                
-                while RUNNING.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_millis(50));
-                    
-                    let t_pressed = hooks::is_key_pressed(0x54); // VK_T
-                    let enter_pressed = hooks::is_key_pressed(0x0D); // VK_RETURN
-                    let escape_pressed = hooks::is_key_pressed(0x1B); // VK_ESCAPE
-                    
-                    // Открытие/закрытие чата по T
-                    if t_pressed && !last_t_state {
-                        let mut chat = CHAT_INSTANCE.lock().unwrap();
-                        if let Some(ref mut chat_inst) = *chat {
-                            chat_inst.toggle();
-                            hooks::set_chat_open(chat_inst.is_open());
-                        }
-                    }
-                    last_t_state = t_pressed;
-                    
-                    // Обработка ввода в чате
-                    if hooks::is_chat_open() {
-                        // Здесь можно обрабатывать ввод с клавиатуры
-                        // Для простоты пока пропустим
-                    }
-                    
-                    network::update();
-                }
+                initialize_client();
             });
+            1
         }
-        0 => {
-            RUNNING.store(false, Ordering::Relaxed);
-            network::shutdown();
+        DLL_PROCESS_DETACH => {
+            println!("[RebornMP] DLL detached");
+            cleanup_client();
+            1
         }
-        _ => {}
+        _ => 1,
     }
-    true
 }
 
-#[no_mangle]
-pub extern "system" fn Connect(server: *const i8) -> bool {
-    if server.is_null() { return false; }
-    let addr = unsafe { std::ffi::CStr::from_ptr(server).to_string_lossy().into_owned() };
-    network::set_server_addr(addr);
-    true
+// ========== ИНИЦИАЛИЗАЦИЯ КЛИЕНТА ==========
+fn initialize_client() {
+    println!("[RebornMP] Initializing client...");
+    
+    // Ждём загрузки игры
+    thread::sleep(Duration::from_secs(3));
+    
+    // Инициализируем UI
+    unsafe {
+        let ui = Arc::new(Mutex::new(UIManager::new()));
+        UI_MANAGER = Some(ui.clone());
+        
+        // Показываем сообщение о подключении
+        CHAT.add_message("🔄 Connecting to RebornMP server...".to_string(), true);
+    }
+    
+    // Подключаемся к серверу
+    unsafe {
+        let network = Arc::new(Mutex::new(NetworkClient::new()));
+        NETWORK_CLIENT = Some(network.clone());
+        
+        let server_ip = "127.0.0.1:3000";
+        println!("[RebornMP] Connecting to {}...", server_ip);
+        
+        if network.lock().unwrap().connect(server_ip) {
+            CHAT.add_message("✅ Connected to RebornMP server!".to_string(), true);
+            CHAT.add_message("💬 Type /help for commands".to_string(), true);
+            
+            // Запускаем основной цикл
+            main_loop();
+        } else {
+            CHAT.add_message("❌ Failed to connect to server!".to_string(), true);
+            println!("[RebornMP] Connection failed");
+        }
+    }
 }
 
-#[no_mangle]
-pub extern "system" fn SendChat(msg: *const i8) -> bool {
-    if msg.is_null() { return false; }
-    let text = unsafe { std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned() };
-    network::send_chat(text)
+// ========== ОСНОВНОЙ ЦИКЛ ==========
+fn main_loop() {
+    println!("[RebornMP] Main loop started");
+    
+    loop {
+        unsafe {
+            // Получаем позицию игрока из памяти (если игра загружена)
+            if !GAME_READY {
+                if let Some(pos) = memory::get_player_position() {
+                    GAME_READY = true;
+                    CHAT.add_message("🎮 Game loaded! Position tracking active.".to_string(), true);
+                    println!("[RebornMP] Game ready at position: {:?}", pos);
+                }
+            }
+            
+            // Отправляем позицию на сервер
+            if GAME_READY {
+                if let Some(net) = &NETWORK_CLIENT {
+                    if let Some(pos) = memory::get_player_position() {
+                        net.lock().unwrap().send_position(pos.0, pos.1, pos.2);
+                    }
+                }
+            }
+            
+            // Получаем сообщения от сервера
+            if let Some(net) = &NETWORK_CLIENT {
+                let messages = net.lock().unwrap().receive_messages();
+                for msg in messages {
+                    handle_server_message(&msg);
+                }
+            }
+            
+            // Обновляем UI
+            if let Some(ui) = &UI_MANAGER {
+                ui.lock().unwrap().update();
+            }
+        }
+        
+        thread::sleep(Duration::from_millis(50)); // 20 FPS синхронизация
+    }
+}
+
+// ========== ОБРАБОТКА СООБЩЕНИЙ ОТ СЕРВЕРА ==========
+fn handle_server_message(message: &str) {
+    println!("[RebornMP] Server message: {}", message);
+    
+    // Парсим JSON
+    if message.contains("\"type\":\"chat\"") {
+        if let Some(text) = extract_json_value(message, "message") {
+            CHAT.add_message(text, false);
+        }
+    }
+    else if message.contains("\"type\":\"init\"") {
+        if let Some(name) = extract_json_value(message, "name") {
+            CHAT.add_message(format!("🏙️ Welcome to RebornMP, {}!", name), true);
+        }
+        if let Some(money) = extract_json_value(message, "money") {
+            CHAT.add_message(format!("💰 Your balance: ${}", money), true);
+        }
+    }
+    else {
+        // Неизвестный тип сообщения
+        CHAT.add_message(message.to_string(), true);
+    }
+}
+
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+fn extract_json_value(json: &str, key: &str) -> Option<String> {
+    let search = format!("\"{}\":\"", key);
+    if let Some(start) = json.find(&search) {
+        let rest = &json[start + search.len()..];
+        if let Some(end) = rest.find('"') {
+            return Some(rest[..end].to_string());
+        }
+    }
+    
+    let search = format!("\"{}\":", key);
+    if let Some(start) = json.find(&search) {
+        let rest = &json[start + search.len()..];
+        let end = rest.find(',').or_else(|| rest.find('}')).unwrap_or(rest.len());
+        let value = rest[..end].trim();
+        if let Ok(num) = value.parse::<i32>() {
+            return Some(num.to_string());
+        }
+    }
+    
+    None
+}
+
+fn cleanup_client() {
+    unsafe {
+        if let Some(net) = &NETWORK_CLIENT {
+            net.lock().unwrap().disconnect();
+        }
+    }
+    println!("[RebornMP] Client cleaned up");
 }
