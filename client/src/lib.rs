@@ -15,26 +15,32 @@ pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut
     match reason {
         DLL_PROCESS_ATTACH => {
             thread::spawn(|| {
-                thread::sleep(Duration::from_secs(2));
+                thread::sleep(Duration::from_secs(3));
                 
-                init_webview();
-                add_message("RebornMP Loaded! Press T to chat", true);
-                
-                let mut chat_open = false;
-                
-                loop {
-                    unsafe {
-                        if GetAsyncKeyState(0x54) & 1 != 0 {
-                            if chat_open {
-                                hide_chat();
-                                chat_open = false;
-                            } else {
-                                show_chat();
-                                chat_open = true;
+                if init_webview() {
+                    add_message("════════════════════════════════════════", true);
+                    add_message("     RebornMP - GTA V Multiplayer Mod", true);
+                    add_message("════════════════════════════════════════", true);
+                    add_message("✅ WebView2 чат готов! Нажми T для ввода", true);
+                    
+                    let mut chat_open = false;
+                    
+                    loop {
+                        unsafe {
+                            if GetAsyncKeyState(0x54) & 1 != 0 {
+                                if chat_open {
+                                    hide_chat();
+                                    chat_open = false;
+                                } else {
+                                    show_chat();
+                                    chat_open = true;
+                                }
                             }
                         }
+                        thread::sleep(Duration::from_millis(50));
                     }
-                    thread::sleep(Duration::from_millis(50));
+                } else {
+                    println!("[RebornMP] WebView2 failed - check Edge Runtime");
                 }
             });
             1
