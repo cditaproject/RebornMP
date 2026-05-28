@@ -11,13 +11,7 @@ winapi = { version = "0.3", features = [
     "winuser",
     "wingdi",
     "winnt",
-    "libloaderapi",
-    "errhandlingapi"
+    "libloaderapi"
 ] }
 lazy_static = "1.4.0"
-webview2-com = "0.3"
-windows = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_UI_WindowsAndMessaging"
-] }
+webview2 = "0.1.4"
