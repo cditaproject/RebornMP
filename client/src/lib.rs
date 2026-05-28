@@ -4,28 +4,29 @@ use std::ffi::c_void;
 use std::thread;
 use std::time::Duration;
 use winapi::um::winnt::DLL_PROCESS_ATTACH;
+use winapi::um::winuser::*;
 
-mod ui;
-mod hooks;
-mod webview2_bridge;
+mod webview_chat;
 
-use ui::CHAT;
+use webview_chat::WEBVIEW_CHAT;
 
 #[no_mangle]
 pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut c_void) -> u32 {
     match reason {
         DLL_PROCESS_ATTACH => {
             thread::spawn(|| {
-                thread::sleep(Duration::from_secs(2));
+                thread::sleep(Duration::from_secs(3));
                 
-                CHAT.add_message("RebornMP Loaded! Press T to chat".to_string(), true);
-                CHAT.add_message("WebView2 чат готов к работе!".to_string(), true);
+                let mut chat = WEBVIEW_CHAT.lock().unwrap();
+                chat.init();
+                chat.add_message("RebornMP Loaded! Press T to chat", true);
                 
                 loop {
-                    // Обработка клавиш
                     unsafe {
-                        if winapi::um::winuser::GetAsyncKeyState(0x54) & 1 != 0 { // VK_T
-                            CHAT.toggle_input();
+                        // Проверяем клавишу T
+                        if GetAsyncKeyState(0x54) & 1 != 0 {
+                            let mut chat = WEBVIEW_CHAT.lock().unwrap();
+                            chat.show_chat();
                         }
                     }
                     thread::sleep(Duration::from_millis(50));
