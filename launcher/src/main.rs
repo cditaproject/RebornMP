@@ -12,16 +12,19 @@ use std::os::windows::ffi::OsStrExt;
 use winapi::um::winnt::{
     PROCESS_ALL_ACCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION,
     PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
-    MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE
+    MEM_COMMIT, MEM_RESERVE, MEM_RELEASE, PAGE_READWRITE
 };
-use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread, GetExitCodeProcess};
+use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread};
 use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory, VirtualFreeEx};
 use winapi::um::libloaderapi::{GetModuleHandleA, GetProcAddress};
 use winapi::um::handleapi::CloseHandle;
-use winapi::shared::minwindef::{DWORD, LPVOID, FARPROC, HMODULE, UINT};
+use winapi::shared::minwindef::{DWORD, LPVOID, FARPROC, HMODULE, UINT, BOOL};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::processthreadsapi::GetCurrentProcess;
+use winapi::um::securitybaseapi::GetTokenInformation;
+use winapi::um::winnt::{TOKEN_QUERY, TokenElevation};
 
 // ========== ЛОГГЕР С РАЗНЫМИ УРОВНЯМИ ==========
 #[derive(PartialEq, PartialOrd)]
@@ -133,7 +136,7 @@ fn main() {
     
     // 3. Запуск GTA V
     logger.info("Step 3: Launching Grand Theft Auto V...");
-    let game_process = match launch_gta5(&gta_path, &mut logger) {
+    let mut game_process = match launch_gta5(&gta_path, &mut logger) {
         Ok(process) => {
             logger.success(&format!("Game launched with PID: {}", process.id()));
             process
@@ -150,7 +153,7 @@ fn main() {
     
     // 5. Инъекция DLL
     logger.info("Step 5: Injecting client.dll...");
-    match inject_dll(&game_process, &client_dll_path, &mut logger) {
+    match inject_dll(&mut game_process, &client_dll_path, &mut logger) {
         Ok(_) => {
             logger.success("Successfully injected client.dll!");
         },
@@ -167,9 +170,16 @@ fn main() {
     // Ждём завершения игры
     loop {
         thread::sleep(Duration::from_secs(5));
-        if let Ok(Some(_)) = game_process.try_wait() {
-            logger.info("Game closed. Exiting...");
-            break;
+        match game_process.try_wait() {
+            Ok(Some(status)) => {
+                logger.info(&format!("Game closed with status: {}", status));
+                break;
+            },
+            Ok(None) => continue,
+            Err(e) => {
+                logger.error(&format!("Error checking game process: {}", e));
+                break;
+            }
         }
     }
 }
@@ -177,34 +187,43 @@ fn main() {
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 fn is_admin() -> bool {
-    use winapi::um::securitybaseapi::GetTokenInformation;
-    use winapi::um::processthreadsapi::GetCurrentProcess;
-    use winapi::um::winnt::{TOKEN_QUERY, TokenElevation};
-    use winapi::um::winbase::GetCurrentProcess;
-    
-    let mut handle = std::ptr::null_mut();
     unsafe {
-        winapi::um::processthreadsapi::OpenProcessToken(
-            GetCurrentProcess(), 
-            TOKEN_QUERY, 
+        let mut handle = std::ptr::null_mut();
+        let current_process = GetCurrentProcess();
+        
+        let result = OpenProcessToken(
+            current_process,
+            TOKEN_QUERY,
             &mut handle
         );
-        if handle.is_null() {
+        
+        if result == 0 || handle.is_null() {
             return false;
         }
         
         let mut elevation = 0u32;
         let mut size = std::mem::size_of::<u32>() as u32;
-        let result = GetTokenInformation(
-            handle, 
+        let token_result = GetTokenInformation(
+            handle,
             TokenElevation,
             &mut elevation as *mut _ as *mut _,
-            size, 
+            size,
             &mut size
         );
+        
         CloseHandle(handle);
-        result != 0 && elevation != 0
+        token_result != 0 && elevation != 0
     }
+}
+
+// Добавляем недостающую функцию OpenProcessToken
+#[link(name = "advapi32")]
+extern "system" {
+    fn OpenProcessToken(
+        ProcessHandle: *mut std::ffi::c_void,
+        DesiredAccess: DWORD,
+        TokenHandle: *mut *mut std::ffi::c_void,
+    ) -> BOOL;
 }
 
 fn find_gta5_path() -> Option<PathBuf> {
@@ -212,6 +231,8 @@ fn find_gta5_path() -> Option<PathBuf> {
         PathBuf::from("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
         PathBuf::from("C:\\Program Files\\Epic Games\\GTAV\\PlayGTAV.exe"),
         PathBuf::from("C:\\Program Files\\Rockstar Games\\Grand Theft Auto V\\PlayGTAV.exe"),
+        PathBuf::from("D:\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
+        PathBuf::from("E:\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
     ];
     
     for path in paths {
@@ -227,6 +248,7 @@ fn find_client_dll() -> Option<PathBuf> {
         PathBuf::from(".\\client.dll"),
         PathBuf::from("..\\target\\release\\client.dll"),
         PathBuf::from(".\\target\\release\\client.dll"),
+        PathBuf::from("..\\..\\target\\release\\client.dll"),
     ];
     
     for path in paths {
@@ -240,6 +262,7 @@ fn find_client_dll() -> Option<PathBuf> {
 fn launch_gta5(gta_path: &PathBuf, logger: &mut Logger) -> Result<Child, std::io::Error> {
     let game_dir = gta_path.parent().unwrap();
     logger.debug(&format!("Working directory: {}", game_dir.display()));
+    logger.debug(&format!("Executable: {}", gta_path.display()));
     
     Command::new(gta_path)
         .current_dir(game_dir)
@@ -248,7 +271,7 @@ fn launch_gta5(gta_path: &PathBuf, logger: &mut Logger) -> Result<Child, std::io
         .spawn()
 }
 
-fn inject_dll(process: &Child, dll_path: &PathBuf, logger: &mut Logger) -> Result<(), String> {
+fn inject_dll(process: &mut Child, dll_path: &PathBuf, logger: &mut Logger) -> Result<(), String> {
     let pid = process.id();
     logger.debug(&format!("Target PID: {}", pid));
     
@@ -267,7 +290,10 @@ fn inject_dll(process: &Child, dll_path: &PathBuf, logger: &mut Logger) -> Resul
         logger.success("Process opened successfully");
         
         // Конвертируем путь в wide string
-        let dll_path_str = dll_path.to_str().unwrap();
+        let dll_path_str = match dll_path.to_str() {
+            Some(path) => path,
+            None => return Err("Invalid DLL path".to_string())
+        };
         logger.debug(&format!("DLL path: {}", dll_path_str));
         
         let dll_path_wide: Vec<u16> = OsStr::new(dll_path_str)
