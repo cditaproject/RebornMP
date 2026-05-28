@@ -54,7 +54,7 @@ pub extern "system" fn DllMain(hinst: *mut c_void, reason: u32, _reserved: *mut 
 fn initialize_client() {
     println!("[RebornMP] Initializing client...");
     
-    // Инициализируем ImGui
+    // Инициализируем UI
     UI.init_imgui();
     
     CHAT.add_message("========================================".to_string(), true);
