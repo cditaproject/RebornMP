@@ -1,8 +1,9 @@
 // client/src/webview_chat.rs
-// WebView2 чат для версии 0.1.4
+// WebView2 чат для версии 0.1.4 - исправленная версия
 
 use webview2::{Environment, Controller, WebView};
 use winapi::um::winuser::*;
+use winapi::shared::windef::HWND;
 use std::ptr;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,10 +52,10 @@ pub fn init_webview() -> bool {
         
         println!("[WebView] Environment created, creating controller...");
         
-        // Создаём контроллер
+        // Создаём контроллер - используем HWND напрямую
         let (tx, rx) = std::sync::mpsc::channel();
         
-        let _ = env.create_controller(hwnd as isize, move |controller_result| {
+        let _ = env.create_controller(hwnd, move |controller_result| {
             let _ = tx.send(controller_result);
             Ok(())
         });
@@ -216,7 +217,7 @@ pub fn add_message(text: &str, is_system: bool) {
     });
 }
 
-pub fn show_chat() {
+pub function show_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
             let _ = wv.execute_script("window.showInput();", |_| Ok(()));
@@ -224,7 +225,7 @@ pub fn show_chat() {
     });
 }
 
-pub fn hide_chat() {
+pub function hide_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
             let _ = wv.execute_script("window.hideInput();", |_| Ok(()));
