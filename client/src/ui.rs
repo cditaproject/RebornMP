@@ -1,12 +1,18 @@
 // client/src/ui.rs
-// RebornMP UI Manager - ImGui Chat (Full Working Version)
+// RebornMP DirectX Overlay Chat
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::cell::RefCell;
+use std::ptr;
+use winapi::um::d3d11::*;
+use winapi::um::dxgi::*;
+use winapi::shared::dxgi::*;
+use winapi::shared::dxgiformat::*;
+use winapi::um::d3dcommon::*;
+use winapi::shared::windef::*;
+use winapi::um::winuser::*;
 use lazy_static::lazy_static;
-use imgui::Context;
 
 #[derive(Clone)]
 pub struct ChatMessage {
@@ -15,11 +21,100 @@ pub struct ChatMessage {
     pub is_system: bool,
 }
 
+pub struct DirectXOverlay {
+    swapchain: *mut IDXGISwapChain,
+    device: *mut ID3D11Device,
+    context: *mut ID3D11DeviceContext,
+    render_target_view: *mut ID3D11RenderTargetView,
+    hwnd: HWND,
+    initialized: bool,
+}
+
+impl DirectXOverlay {
+    pub fn new() -> Self {
+        DirectXOverlay {
+            swapchain: ptr::null_mut(),
+            device: ptr::null_mut(),
+            context: ptr::null_mut(),
+            render_target_view: ptr::null_mut(),
+            hwnd: ptr::null_mut(),
+            initialized: false,
+        }
+    }
+    
+    pub fn find_window(&mut self) -> bool {
+        unsafe {
+            self.hwnd = FindWindowA(ptr::null(), b"Grand Theft Auto V\0".as_ptr() as *const i8);
+            if self.hwnd.is_null() {
+                println!("[UI] GTA V window not found");
+                return false;
+            }
+            println!("[UI] Found GTA V window");
+            true
+        }
+    }
+    
+    pub fn init(&mut self) -> bool {
+        if self.initialized { return true; }
+        
+        unsafe {
+            let mut swapchain_desc: DXGI_SWAP_CHAIN_DESC = std::mem::zeroed();
+            swapchain_desc.BufferDesc.Width = 1920;
+            swapchain_desc.BufferDesc.Height = 1080;
+            swapchain_desc.BufferDesc.RefreshRate.Numerator = 60;
+            swapchain_desc.BufferDesc.RefreshRate.Denominator = 1;
+            swapchain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            swapchain_desc.SampleDesc.Count = 1;
+            swapchain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            swapchain_desc.BufferCount = 2;
+            swapchain_desc.OutputWindow = self.hwnd;
+            swapchain_desc.Windowed = 1;
+            
+            let result = D3D11CreateDeviceAndSwapChain(
+                ptr::null_mut(),
+                D3D_DRIVER_TYPE_HARDWARE,
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+                0,
+                D3D11_SDK_VERSION,
+                &swapchain_desc,
+                &mut self.swapchain,
+                &mut self.device,
+                ptr::null_mut(),
+                &mut self.context,
+            );
+            
+            if result >= 0 {
+                self.initialized = true;
+                println!("[UI] DirectX overlay initialized");
+                true
+            } else {
+                println!("[UI] Failed to init DirectX: {}", result);
+                false
+            }
+        }
+    }
+    
+    pub fn render_text(&self, text: &str, x: i32, y: i32, color: u32) {
+        // Простая отрисовка текста через Win32 GDI поверх DirectX
+        unsafe {
+            if !self.hwnd.is_null() {
+                let hdc = GetDC(self.hwnd);
+                SetTextColor(hdc, color);
+                SetBkMode(hdc, TRANSPARENT);
+                TextOutA(hdc, x, y, text.as_ptr() as *const i8, text.len() as i32);
+                ReleaseDC(self.hwnd, hdc);
+            }
+        }
+    }
+}
+
 pub struct ChatManager {
     messages: Mutex<VecDeque<ChatMessage>>,
     input_buffer: Mutex<String>,
     is_open: Mutex<bool>,
-    max_messages: usize,
+    overlay: Mutex<DirectXOverlay>,
 }
 
 impl ChatManager {
@@ -28,7 +123,14 @@ impl ChatManager {
             messages: Mutex::new(VecDeque::with_capacity(100)),
             input_buffer: Mutex::new(String::new()),
             is_open: Mutex::new(false),
-            max_messages: 50,
+            overlay: Mutex::new(DirectXOverlay::new()),
+        }
+    }
+    
+    pub fn init(&self) {
+        let mut overlay = self.overlay.lock().unwrap();
+        if overlay.find_window() {
+            overlay.init();
         }
     }
     
@@ -41,25 +143,21 @@ impl ChatManager {
         
         messages.push_back(ChatMessage { text: text.clone(), timestamp, is_system });
         
-        while messages.len() > self.max_messages {
+        while messages.len() > 50 {
             messages.pop_front();
         }
         
-        let prefix = if is_system { "[SYSTEM]" } else { "[CHAT]" };
-        println!("{} {}", prefix, text);
-    }
-    
-    pub fn get_messages(&self) -> Vec<ChatMessage> {
-        self.messages.lock().unwrap().iter().cloned().collect()
+        println!("[{}] {}", if is_system { "SYS" } else { "CHAT" }, text);
+        self.render();
     }
     
     pub fn toggle_input(&self) {
         let mut is_open = self.is_open.lock().unwrap();
         *is_open = !*is_open;
         if !*is_open {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.clear();
+            self.input_buffer.lock().unwrap().clear();
         }
+        self.render();
     }
     
     pub fn is_input_open(&self) -> bool {
@@ -72,142 +170,59 @@ impl ChatManager {
     
     pub fn add_char(&self, c: char) {
         if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.push(c);
+            self.input_buffer.lock().unwrap().push(c);
+            self.render();
         }
     }
     
     pub fn backspace(&self) {
         if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            buffer.pop();
+            self.input_buffer.lock().unwrap().pop();
+            self.render();
         }
     }
     
     pub fn send_message(&self) -> Option<String> {
         if *self.is_open.lock().unwrap() {
-            let mut buffer = self.input_buffer.lock().unwrap();
-            let message = buffer.clone();
-            if !message.is_empty() {
-                buffer.clear();
-                self.toggle_input();
-                return Some(message);
+            let msg = self.input_buffer.lock().unwrap().clone();
+            if !msg.is_empty() {
+                self.input_buffer.lock().unwrap().clear();
+                *self.is_open.lock().unwrap() = false;
+                self.render();
+                return Some(msg);
             }
-            self.toggle_input();
+            *self.is_open.lock().unwrap() = false;
+            self.render();
         }
         None
     }
     
-    pub fn clear(&self) {
-        let mut messages = self.messages.lock().unwrap();
-        messages.clear();
+    pub fn render(&self) {
+        let overlay = self.overlay.lock().unwrap();
+        if !overlay.initialized { return; }
+        
+        let messages = self.messages.lock().unwrap();
+        let start = if messages.len() > 12 { messages.len() - 12 } else { 0 };
+        
+        let mut y = 50;
+        for msg in messages.iter().skip(start) {
+            let color = if msg.is_system { 0x00FFFFAA } else { 0x0000FF00 };
+            let text = format!("{} {}", if msg.is_system { "[SYS]" } else "[CHAT]", msg.text);
+            overlay.render_text(&text, 10, y, color);
+            y += 25;
+        }
+        
+        if *self.is_open.lock().unwrap() {
+            let input = self.get_input_text();
+            overlay.render_text(&format!("> {}", input), 10, y + 10, 0xFFFFFFFF);
+        }
     }
     
-    pub fn set_console_mode(&self, _enabled: bool) {
-        // Для совместимости
+    pub fn get_messages(&self) -> Vec<ChatMessage> {
+        self.messages.lock().unwrap().iter().cloned().collect()
     }
 }
 
 lazy_static! {
     pub static ref CHAT: ChatManager = ChatManager::new();
-}
-
-// ========== IMGUI UI МЕНЕДЖЕР ==========
-pub struct UIManager {
-    imgui_ctx: RefCell<Option<Context>>,
-}
-
-impl UIManager {
-    pub fn new() -> Self {
-        UIManager {
-            imgui_ctx: RefCell::new(None),
-        }
-    }
-    
-    pub fn init_imgui(&self) {
-        let mut ctx = self.imgui_ctx.borrow_mut();
-        if ctx.is_none() {
-            *ctx = Some(Context::create());
-            
-            // Настройка стиля
-            if let Some(ref mut imgui_ctx) = *ctx {
-                let style = imgui_ctx.style_mut();
-                style.window_rounding = 5.0;
-                style.window_padding = [10.0, 10.0];
-                style.colors[imgui::StyleColor::WindowBg] = [0.0, 0.0, 0.0, 0.8];
-                style.colors[imgui::StyleColor::Text] = [1.0, 1.0, 1.0, 1.0];
-            }
-            
-            println!("[UI] ImGui initialized");
-        }
-    }
-    
-    pub fn render(&self) {
-        let mut ctx = self.imgui_ctx.borrow_mut();
-        if let Some(ref mut imgui_ctx) = *ctx {
-            let ui = imgui_ctx.frame();
-            
-            // Окно чата
-            let window = imgui::Window::new("RebornMP Chat")
-                .size([400.0, 300.0], imgui::Condition::FirstUseEver)
-                .position([20.0, 100.0], imgui::Condition::FirstUseEver);
-            window.build(&ui, || {
-                let messages = CHAT.get_messages();
-                let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
-                
-                for msg in messages.iter().skip(start) {
-                    let color = if msg.is_system {
-                        [1.0, 0.8, 0.2, 1.0]
-                    } else {
-                        [0.2, 1.0, 0.2, 1.0]
-                    };
-                    ui.text_colored(color, &msg.text);
-                }
-            });
-            
-            // Поле ввода
-            if CHAT.is_input_open() {
-                let mut input = CHAT.get_input_text();
-                
-                let input_window = imgui::Window::new("Chat Input")
-                    .size([400.0, 60.0], imgui::Condition::FirstUseEver)
-                    .position([20.0, 420.0], imgui::Condition::FirstUseEver)
-                    .title_bar(false);
-                
-                input_window.build(&ui, || {
-                    if ui.input_text("##input", &mut input)
-                        .enter_returns_true(true)
-                        .build() {
-                        if let Some(msg) = CHAT.send_message() {
-                            if let Some(net) = unsafe { &crate::NETWORK_CLIENT } {
-                                net.lock().unwrap().send_chat(&msg);
-                            }
-                        }
-                    }
-                    
-                    if ui.button("Send", [80.0, 25.0]) {
-                        if let Some(msg) = CHAT.send_message() {
-                            if let Some(net) = unsafe { &crate::NETWORK_CLIENT } {
-                                net.lock().unwrap().send_chat(&msg);
-                            }
-                        }
-                    }
-                    
-                    ui.same_line();
-                    
-                    if ui.button("Close", [80.0, 25.0]) {
-                        CHAT.toggle_input();
-                    }
-                });
-            }
-        }
-    }
-}
-
-lazy_static! {
-    pub static ref UI: UIManager = UIManager::new();
-}
-
-pub fn add_chat_message(text: String, is_system: bool) {
-    CHAT.add_message(text, is_system);
 }
