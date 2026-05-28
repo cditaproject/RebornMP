@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 sysinfo = "0.30"
+winapi = { version = "0.3", features = ["full"] }
+chrono = "0.4"  # Для детальных меток времени
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.58.0"
