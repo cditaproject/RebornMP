@@ -1,7 +1,7 @@
 // client/src/webview_chat.rs
-// Исправленная версия с правильным API webview2
+// Правильная версия с корректным API webview2
 
-use webview2::WebView;
+use webview2::{WebView, WebViewBuilder};
 use winapi::um::winuser::*;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,8 +20,10 @@ pub fn init_webview() -> bool {
             return false;
         }
         
-        // Создание WebView2
-        let webview = match WebView::new(Some(hwnd as usize)) {
+        // Используем WebViewBuilder для создания
+        let webview = match WebViewBuilder::new()
+            .bounds(0, 0, 800, 600)
+            .build(Some(hwnd as usize)) {
             Ok(wv) => {
                 println!("[WebView] Created successfully");
                 wv
