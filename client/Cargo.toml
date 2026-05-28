@@ -10,8 +10,7 @@ crate-type = ["cdylib"]
 winapi = { version = "0.3", features = [
     "winuser",
     "wingdi",
-    "winnt",
-    "libloaderapi"
+    "winnt"
 ] }
 lazy_static = "1.4.0"
 webview2 = "0.1.4"
