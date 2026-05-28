@@ -1,18 +1,23 @@
 // client/src/webview_chat.rs
-// Для версии webview2 0.1.4
+// WebView2 чат - правильная реализация по документации
 
-use webview2::WebView;
+use webview2::{EnvironmentBuilder, Controller, WebView};
 use winapi::um::winuser::*;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 thread_local! {
+    static CONTROLLER: RefCell<Option<Controller>> = RefCell::new(None);
     static WEBVIEW: RefCell<Option<WebView>> = RefCell::new(None);
-    static WEBVIEW_READY: AtomicBool = AtomicBool::new(false);
+    static INITIALIZED: AtomicBool = AtomicBool::new(false);
 }
 
 pub fn init_webview() -> bool {
+    if INITIALIZED.with(|i| i.load(Ordering::Relaxed)) {
+        return true;
+    }
+    
     unsafe {
         let hwnd = FindWindowA(ptr::null(), b"Grand Theft Auto V\0".as_ptr() as *const i8);
         if hwnd.is_null() {
@@ -20,48 +25,139 @@ pub fn init_webview() -> bool {
             return false;
         }
         
-        // Создание WebView2 через WebView::new
-        let webview = match WebView::new(Some(hwnd as usize)) {
-            Ok(wv) => {
-                println!("[WebView] Created successfully");
-                wv
+        println!("[WebView] Creating environment...");
+        
+        // Используем EnvironmentBuilder как в документации
+        let env = match EnvironmentBuilder::new()
+            .build() {
+            Ok(env) => {
+                println!("[WebView] Environment created");
+                env
             }
             Err(e) => {
-                println!("[WebView] Failed to create: {:?}", e);
+                println!("[WebView] Failed to create environment: {:?}", e);
                 return false;
             }
         };
         
-        // HTML код
+        // Создаём контроллер
+        let controller = match env.create_controller(hwnd as isize, None) {
+            Ok(c) => {
+                println!("[WebView] Controller created");
+                c
+            }
+            Err(e) => {
+                println!("[WebView] Failed to create controller: {:?}", e);
+                return false;
+            }
+        };
+        
+        // Получаем WebView из контроллера
+        let webview = match controller.get_core_web_view2() {
+            Ok(wv) => {
+                println!("[WebView] WebView obtained");
+                wv
+            }
+            Err(e) => {
+                println!("[WebView] Failed to get WebView: {:?}", e);
+                return false;
+            }
+        };
+        
+        // HTML интерфейс
         let html = r#"
+        <!DOCTYPE html>
         <html style="background: transparent;">
-        <head><style>
-            body { margin: 0; padding: 0; background: transparent; font-family: 'Segoe UI'; }
-            #chat { position: fixed; bottom: 20px; left: 20px; width: 400px; max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.7); border-radius: 8px; padding: 10px; color: white; }
-            .msg { margin: 5px 0; padding: 5px; border-radius: 4px; }
-            .system { color: #ffaa00; }
-            .player { color: #00ff00; }
-            #input { position: fixed; bottom: 20px; left: 20px; width: 400px; background: rgba(0,0,0,0.9); border: 1px solid #444; border-radius: 4px; padding: 8px; color: white; display: none; }
-        </style></head>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body { background: transparent; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+                #chat-container {
+                    position: fixed;
+                    bottom: 20px;
+                    left: 20px;
+                    width: 450px;
+                    max-height: 350px;
+                    overflow-y: auto;
+                    background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.7));
+                    border-radius: 10px;
+                    padding: 12px;
+                    backdrop-filter: blur(5px);
+                    border-left: 3px solid #00ff00;
+                }
+                .message {
+                    margin: 8px 0;
+                    padding: 6px 10px;
+                    border-radius: 6px;
+                    word-wrap: break-word;
+                    animation: fadeIn 0.2s ease-in;
+                }
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: translateY(5px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .system-message { color: #ffaa44; text-shadow: 0 0 2px rgba(0,0,0,0.5); }
+                .player-message { color: #44ff44; text-shadow: 0 0 2px rgba(0,0,0,0.5); }
+                .player-name { color: #ffaa44; font-weight: bold; }
+                #input-container {
+                    position: fixed;
+                    bottom: 20px;
+                    left: 20px;
+                    width: 450px;
+                    background: rgba(0,0,0,0.95);
+                    border-radius: 8px;
+                    border: 1px solid #44ff44;
+                    padding: 10px;
+                    display: none;
+                    backdrop-filter: blur(5px);
+                }
+                #chat-input {
+                    width: 100%;
+                    background: transparent;
+                    border: none;
+                    color: white;
+                    font-size: 14px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    outline: none;
+                }
+                #chat-input::placeholder { color: #888; }
+            </style>
+        </head>
         <body>
-            <div id="chat"></div>
-            <input type="text" id="input" placeholder="Message...">
+            <div id="chat-container"></div>
+            <div id="input-container">
+                <input type="text" id="chat-input" placeholder="Type your message..." autocomplete="off">
+            </div>
             <script>
-                let chat = document.getElementById('chat');
-                let input = document.getElementById('input');
-                window.addMessage = function(t, s) {
-                    let m = document.createElement('div');
-                    m.className = 'msg ' + (s ? 'system' : 'player');
-                    m.textContent = t;
-                    chat.appendChild(m);
-                    chat.scrollTop = chat.scrollHeight;
-                    if (chat.children.length > 50) chat.removeChild(chat.children[0]);
+                let chatContainer = document.getElementById('chat-container');
+                let inputContainer = document.getElementById('input-container');
+                let chatInput = document.getElementById('chat-input');
+                
+                window.addMessage = function(text, isSystem) {
+                    let msgDiv = document.createElement('div');
+                    msgDiv.className = 'message ' + (isSystem ? 'system-message' : 'player-message');
+                    msgDiv.textContent = text;
+                    chatContainer.appendChild(msgDiv);
+                    msgDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    while (chatContainer.children.length > 100) {
+                        chatContainer.removeChild(chatContainer.firstChild);
+                    }
                 };
-                window.showInput = function() { input.style.display = 'block'; input.focus(); };
-                window.hideInput = function() { input.style.display = 'none'; input.value = ''; };
-                input.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter' && input.value.trim()) {
-                        window.external.sendMessage(input.value);
+                
+                window.showInput = function() {
+                    inputContainer.style.display = 'block';
+                    chatInput.focus();
+                };
+                
+                window.hideInput = function() {
+                    inputContainer.style.display = 'none';
+                    chatInput.value = '';
+                };
+                
+                chatInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter' && chatInput.value.trim()) {
+                        window.external.notify(chatInput.value);
                         window.hideInput();
                     }
                 });
@@ -72,11 +168,15 @@ pub fn init_webview() -> bool {
         
         webview.navigate_to_string(html);
         
+        CONTROLLER.with(|c| {
+            *c.borrow_mut() = Some(controller);
+        });
+        
         WEBVIEW.with(|w| {
             *w.borrow_mut() = Some(webview);
         });
         
-        WEBVIEW_READY.with(|r| r.store(true, Ordering::Relaxed));
+        INITIALIZED.with(|i| i.store(true, Ordering::Relaxed));
         println!("[WebView] Ready!");
         true
     }
@@ -111,5 +211,5 @@ pub fn hide_chat() {
 }
 
 pub fn is_ready() -> bool {
-    WEBVIEW_READY.with(|r| r.load(Ordering::Relaxed))
+    INITIALIZED.with(|i| i.load(Ordering::Relaxed))
 }
