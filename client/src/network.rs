@@ -2,7 +2,7 @@
 // RebornMP Network Client - Full Version
 
 use std::net::TcpStream;
-use std::io::{Read, Write};
+use std::io::{Read};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::Duration;
@@ -44,13 +44,13 @@ impl NetworkClient {
                 // Поток отправки
                 thread::spawn(move || {
                     loop {
-                        // Используем recv() вместо итератора
-                        // В реальном коде нужно получать сообщения из канала
                         thread::sleep(Duration::from_millis(10));
+                        // Здесь будет отправка сообщений из очереди
                     }
                 });
                 
-                let recv_tx = recv_tx.clone();
+                // Клонируем recv_tx ДО того как переместим stream
+                let recv_tx_clone = recv_tx.clone();
                 let mut recv_stream = stream;
                 
                 // Поток получения
@@ -63,7 +63,7 @@ impl NetworkClient {
                                 buffer.push_str(&String::from_utf8_lossy(&temp[..n]));
                                 while let Some(pos) = buffer.find('\n') {
                                     let msg = buffer[..pos].to_string();
-                                    let _ = recv_tx.send(msg);
+                                    let _ = recv_tx_clone.send(msg);
                                     buffer = buffer[pos + 1..].to_string();
                                 }
                             }
