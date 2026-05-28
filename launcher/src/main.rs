@@ -5,14 +5,23 @@ use std::process::{Command, Child};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
-use winapi::um::winnt::{PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION, PROCESS_CREATE_THREAD};
-use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread};
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
+
+// Правильные импорты для winapi
+use winapi::um::winnt::{
+    PROCESS_ALL_ACCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION,
+    PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
+    MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE
+};
+use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread, GetExitCodeProcess};
 use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory, VirtualFreeEx};
-use winapi::um::libloaderapi::{GetModuleHandleA, GetProcAddress, LoadLibraryA};
+use winapi::um::libloaderapi::{GetModuleHandleA, GetProcAddress};
 use winapi::um::handleapi::CloseHandle;
-use winapi::shared::minwindef::{DWORD, LPVOID, FARPROC, HMODULE, LPTHREAD_START_ROUTINE};
+use winapi::shared::minwindef::{DWORD, LPVOID, FARPROC, HMODULE, UINT};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
+use winapi::um::errhandlingapi::GetLastError;
 
 // ========== ЛОГГЕР С РАЗНЫМИ УРОВНЯМИ ==========
 #[derive(PartialEq, PartialOrd)]
@@ -70,11 +79,11 @@ impl Logger {
         }
     }
     
-    macro_rules! debug { ($($arg:tt)*) => { self.log(LogLevel::DEBUG, "DEBUG", format_args!($($arg)*)) }; }
-    macro_rules! info { ($($arg:tt)*) => { self.log(LogLevel::INFO, "INFO", format_args!($($arg)*)) }; }
-    macro_rules! success { ($($arg:tt)*) => { self.log(LogLevel::SUCCESS, "SUCCESS", format_args!($($arg)*)) }; }
-    macro_rules! warning { ($($arg:tt)*) => { self.log(LogLevel::WARNING, "WARNING", format_args!($($arg)*)) }; }
-    macro_rules! error { ($($arg:tt)*) => { self.log(LogLevel::ERROR, "ERROR", format_args!($($arg)*)) }; }
+    fn debug(&mut self, msg: &str) { self.log(LogLevel::DEBUG, "DEBUG", format_args!("{}", msg)); }
+    fn info(&mut self, msg: &str) { self.log(LogLevel::INFO, "INFO", format_args!("{}", msg)); }
+    fn success(&mut self, msg: &str) { self.log(LogLevel::SUCCESS, "SUCCESS", format_args!("{}", msg)); }
+    fn warning(&mut self, msg: &str) { self.log(LogLevel::WARNING, "WARNING", format_args!("{}", msg)); }
+    fn error(&mut self, msg: &str) { self.log(LogLevel::ERROR, "ERROR", format_args!("{}", msg)); }
 }
 
 // ========== ОСНОВНАЯ ФУНКЦИЯ ==========
@@ -89,7 +98,6 @@ fn main() {
     if !is_admin() {
         logger.warning("Launcher not running as Administrator!");
         logger.warning("DLL injection may fail. Run as Admin for best results.");
-        logger.debug("To run as Admin: Right-click -> Run as Administrator");
     }
     
     // 1. Поиск GTA V
@@ -101,12 +109,7 @@ fn main() {
         },
         None => {
             logger.error("Could not find Grand Theft Auto V installation!");
-            logger.error("Search paths checked:");
-            logger.error("  - Steam: C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V");
-            logger.error("  - Epic: C:\\Program Files\\Epic Games\\GTAV");
-            logger.error("  - Rockstar: C:\\Program Files\\Rockstar Games\\Grand Theft Auto V");
-            logger.error("  - Registry: HKLM\\Software\\Rockstar Games\\Grand Theft Auto V");
-            logger.info("Please install GTA V or specify path manually.");
+            logger.error("Please install GTA V or specify path manually.");
             return;
         }
     };
@@ -116,25 +119,14 @@ fn main() {
     let client_dll_path = match find_client_dll() {
         Some(path) => {
             logger.success(&format!("Found client.dll at: {}", path.display()));
-            
-            // Проверка размера файла
             if let Ok(metadata) = std::fs::metadata(&path) {
                 logger.debug(&format!("File size: {} bytes", metadata.len()));
-                if metadata.len() == 0 {
-                    logger.error("client.dll is empty! Build failed?");
-                    return;
-                }
             }
-            
             path
         },
         None => {
             logger.error("Could not find RebornMP client.dll!");
-            logger.error("Expected locations:");
-            logger.error("  - ./client.dll");
-            logger.error("  - ../target/release/client.dll");
-            logger.error("  - ./target/release/client.dll");
-            logger.info("Please build the project first: cargo build --release");
+            logger.error("Please build the project first: cargo build --release");
             return;
         }
     };
@@ -153,94 +145,73 @@ fn main() {
     };
     
     // 4. Ожидание загрузки игры
-    logger.info("Step 4: Waiting for game to fully load...");
-    logger.debug("Waiting 5 seconds for initial loading...");
+    logger.info("Step 4: Waiting for game to load...");
     thread::sleep(Duration::from_secs(5));
     
     // 5. Инъекция DLL
-    logger.info("Step 5: Injecting client.dll into game process...");
+    logger.info("Step 5: Injecting client.dll...");
     match inject_dll(&game_process, &client_dll_path, &mut logger) {
         Ok(_) => {
             logger.success("Successfully injected client.dll!");
-            logger.info("The mod should now be active in game.");
         },
         Err(e) => {
             logger.error(&format!("Injection failed: {}", e));
-            logger.error("Possible causes:");
-            logger.error("  - Antivirus blocking injection");
-            logger.error("  - Game is protected (BattlEye)");
-            logger.error("  - Insufficient permissions (run as Admin)");
-            logger.error("  - Architecture mismatch (x64 required)");
         }
     }
     
-    // 6. Завершение
     logger.info("========================================");
-    logger.info("Launcher work completed!");
-    logger.info("Log saved to: launcher_debug.log");
-    logger.info("Press Ctrl+C to exit launcher");
+    logger.info("Launcher running. Log saved to launcher_debug.log");
+    logger.info("Press Ctrl+C to exit");
     logger.info("========================================");
     
     // Ждём завершения игры
-    logger.debug("Monitoring game process (will exit when game closes)...");
     loop {
         thread::sleep(Duration::from_secs(5));
-        if let Ok(exit_code) = game_process.try_wait() {
-            if exit_code.is_some() {
-                logger.info("Game process has terminated. Exiting...");
-                break;
-            }
-        }
-        
-        // Проверяем, жив ли процесс (дополнительная проверка)
-        if let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION, 0, game_process.id()) {
-            let mut exit_code: DWORD = 0;
-            unsafe {
-                winapi::um::processthreadsapi::GetExitCodeProcess(handle, &mut exit_code);
-                CloseHandle(handle);
-            }
-            if exit_code != 259 { // STILL_ACTIVE
-                logger.info("Game process has exited. Exiting...");
-                break;
-            }
+        if let Ok(Some(_)) = game_process.try_wait() {
+            logger.info("Game closed. Exiting...");
+            break;
         }
     }
 }
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
-/// Проверка прав администратора
 fn is_admin() -> bool {
-    use winapi::um::securitybaseapi::*;
+    use winapi::um::securitybaseapi::GetTokenInformation;
+    use winapi::um::processthreadsapi::GetCurrentProcess;
+    use winapi::um::winnt::{TOKEN_QUERY, TokenElevation};
     use winapi::um::winbase::GetCurrentProcess;
-    use winapi::um::winnt::TOKEN_QUERY;
     
     let mut handle = std::ptr::null_mut();
     unsafe {
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle);
+        winapi::um::processthreadsapi::OpenProcessToken(
+            GetCurrentProcess(), 
+            TOKEN_QUERY, 
+            &mut handle
+        );
         if handle.is_null() {
             return false;
         }
         
         let mut elevation = 0u32;
         let mut size = std::mem::size_of::<u32>() as u32;
-        let result = GetTokenInformation(handle, TokenElevation, 
-                                         &mut elevation as *mut _ as *mut _,
-                                         size, &mut size);
+        let result = GetTokenInformation(
+            handle, 
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            size, 
+            &mut size
+        );
         CloseHandle(handle);
         result != 0 && elevation != 0
     }
 }
 
-/// Поиск пути к GTA V
 fn find_gta5_path() -> Option<PathBuf> {
-    // Список возможных путей
     let paths = vec![
         PathBuf::from("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
         PathBuf::from("C:\\Program Files\\Epic Games\\GTAV\\PlayGTAV.exe"),
         PathBuf::from("C:\\Program Files\\Rockstar Games\\Grand Theft Auto V\\PlayGTAV.exe"),
-        PathBuf::from("D:\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
-        PathBuf::from(".\\PlayGTAV.exe"),
     ];
     
     for path in paths {
@@ -248,34 +219,14 @@ fn find_gta5_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    
-    // Попытка найти через реестр
-    #[cfg(windows)]
-    {
-        use winreg::RegKey;
-        use winreg::enums::*;
-        
-        let hkml = RegKey::predef(HKEY_LOCAL_MACHINE);
-        if let Ok(key) = hkml.open_subkey(r"SOFTWARE\Rockstar Games\Grand Theft Auto V") {
-            if let Ok(path) = key.get_value::<String, _>("InstallFolder") {
-                let exe_path = PathBuf::from(path).join("PlayGTAV.exe");
-                if exe_path.exists() {
-                    return Some(exe_path);
-                }
-            }
-        }
-    }
-    
     None
 }
 
-/// Поиск client.dll
 fn find_client_dll() -> Option<PathBuf> {
     let paths = vec![
         PathBuf::from(".\\client.dll"),
         PathBuf::from("..\\target\\release\\client.dll"),
         PathBuf::from(".\\target\\release\\client.dll"),
-        PathBuf::from("..\\..\\target\\release\\client.dll"),
     ];
     
     for path in paths {
@@ -283,78 +234,64 @@ fn find_client_dll() -> Option<PathBuf> {
             return Some(path.canonicalize().unwrap_or(path));
         }
     }
-    
     None
 }
 
-/// Запуск GTA V
 fn launch_gta5(gta_path: &PathBuf, logger: &mut Logger) -> Result<Child, std::io::Error> {
-    logger.debug(&format!("Executable: {}", gta_path.display()));
-    logger.debug("Working directory: {}", gta_path.parent().unwrap().display());
-    
     let game_dir = gta_path.parent().unwrap();
+    logger.debug(&format!("Working directory: {}", game_dir.display()));
     
-    // Параметры запуска (отключаем BattlEye для одиночной игры)
-    let args = ["-noBattleEye", "-scOfflineOnly"];
-    logger.debug(&format!("Launch arguments: {:?}", args));
-    
-    let process = Command::new(gta_path)
-        .args(&args)
+    Command::new(gta_path)
         .current_dir(game_dir)
-        .spawn()?;
-    
-    Ok(process)
+        .arg("-noBattleEye")
+        .arg("-scOfflineOnly")
+        .spawn()
 }
 
-/// Инъекция DLL в процесс
 fn inject_dll(process: &Child, dll_path: &PathBuf, logger: &mut Logger) -> Result<(), String> {
     let pid = process.id();
     logger.debug(&format!("Target PID: {}", pid));
     
-    // Открываем процесс с максимальными правами
     unsafe {
-        logger.debug("Opening process with full access...");
         let process_handle = OpenProcess(
-            PROCESS_ALL_ACCESS | PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | 
-            PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
+            PROCESS_ALL_ACCESS,
             0,
             pid
         );
         
         if process_handle.is_null() {
-            let error = std::io::Error::last_os_error();
-            logger.error(&format!("OpenProcess failed: {:?}", error));
-            return Err(format!("Failed to open process: {}", error));
+            let error = GetLastError();
+            logger.error(&format!("OpenProcess failed. Error code: {}", error));
+            return Err(format!("Failed to open process. Error: {}", error));
         }
         logger.success("Process opened successfully");
         
-        // Получаем путь к DLL в формате UTF-16 (Windows)
+        // Конвертируем путь в wide string
         let dll_path_str = dll_path.to_str().unwrap();
         logger.debug(&format!("DLL path: {}", dll_path_str));
         
-        // Выделяем память в процессе для пути DLL
-        logger.debug("Allocating memory in target process...");
-        let dll_path_wide: Vec<u16> = dll_path_str.encode_utf16().chain(Some(0)).collect();
+        let dll_path_wide: Vec<u16> = OsStr::new(dll_path_str)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
         let dll_path_size = dll_path_wide.len() * 2;
         
         let remote_memory = VirtualAllocEx(
             process_handle,
             std::ptr::null_mut(),
             dll_path_size,
-            winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
-            winapi::um::winnt::PAGE_READWRITE
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE
         );
         
         if remote_memory.is_null() {
-            let error = std::io::Error::last_os_error();
-            logger.error(&format!("VirtualAllocEx failed: {:?}", error));
+            let error = GetLastError();
+            logger.error(&format!("VirtualAllocEx failed. Error: {}", error));
             CloseHandle(process_handle);
-            return Err(format!("Failed to allocate memory: {}", error));
+            return Err(format!("Failed to allocate memory. Error: {}", error));
         }
         logger.success(&format!("Memory allocated at: {:p}", remote_memory));
         
-        // Записываем путь DLL в память процесса
-        logger.debug("Writing DLL path to process memory...");
         let mut bytes_written = 0;
         let result = WriteProcessMemory(
             process_handle,
@@ -365,68 +302,56 @@ fn inject_dll(process: &Child, dll_path: &PathBuf, logger: &mut Logger) -> Resul
         );
         
         if result == 0 {
-            let error = std::io::Error::last_os_error();
-            logger.error(&format!("WriteProcessMemory failed: {:?}", error));
-            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            let error = GetLastError();
+            logger.error(&format!("WriteProcessMemory failed. Error: {}", error));
+            VirtualFreeEx(process_handle, remote_memory, 0, MEM_RELEASE);
             CloseHandle(process_handle);
-            return Err(format!("Failed to write memory: {}", error));
+            return Err(format!("Failed to write memory. Error: {}", error));
         }
-        logger.success(&format!("Wrote {} bytes to remote process", bytes_written));
+        logger.success(&format!("Wrote {} bytes", bytes_written));
         
-        // Получаем адрес LoadLibraryA в kernel32.dll
-        logger.debug("Getting LoadLibraryA address...");
         let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr() as *const i8);
         if kernel32.is_null() {
-            logger.error("Failed to get kernel32.dll handle");
-            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            logger.error("Failed to get kernel32.dll");
+            VirtualFreeEx(process_handle, remote_memory, 0, MEM_RELEASE);
             CloseHandle(process_handle);
             return Err("Failed to get kernel32.dll".to_string());
         }
         
         let load_library_addr = GetProcAddress(kernel32, b"LoadLibraryA\0".as_ptr() as *const i8);
         if load_library_addr.is_null() {
-            logger.error("Failed to get LoadLibraryA address");
-            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            logger.error("Failed to get LoadLibraryA");
+            VirtualFreeEx(process_handle, remote_memory, 0, MEM_RELEASE);
             CloseHandle(process_handle);
             return Err("Failed to get LoadLibraryA".to_string());
         }
         logger.success(&format!("LoadLibraryA at: {:p}", load_library_addr));
         
-        // Создаём удалённый поток для загрузки DLL
-        logger.debug("Creating remote thread to load DLL...");
         let thread_id = 0u32;
         let thread_handle = CreateRemoteThread(
             process_handle,
             std::ptr::null_mut(),
             0,
-            Some(std::mem::transmute::<FARPROC, LPTHREAD_START_ROUTINE>(load_library_addr)),
+            std::mem::transmute(load_library_addr),
             remote_memory,
             0,
             &mut thread_id as *mut DWORD
         );
         
         if thread_handle.is_null() {
-            let error = std::io::Error::last_os_error();
-            logger.error(&format!("CreateRemoteThread failed: {:?}", error));
-            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            let error = GetLastError();
+            logger.error(&format!("CreateRemoteThread failed. Error: {}", error));
+            VirtualFreeEx(process_handle, remote_memory, 0, MEM_RELEASE);
             CloseHandle(process_handle);
-            return Err(format!("Failed to create remote thread: {}", error));
+            return Err(format!("Failed to create remote thread. Error: {}", error));
         }
         logger.success(&format!("Remote thread created, ID: {}", thread_id));
         
-        // Ждём завершения потока (DLL загрузилась)
-        logger.debug("Waiting for remote thread to complete...");
-        let wait_result = WaitForSingleObject(thread_handle, INFINITE);
-        if wait_result != 0 {
-            logger.warning(&format!("WaitForSingleObject returned: {}", wait_result));
-        } else {
-            logger.success("Remote thread completed - DLL loaded successfully!");
-        }
+        WaitForSingleObject(thread_handle, INFINITE);
+        logger.success("DLL loaded successfully!");
         
-        // Очистка
-        logger.debug("Cleaning up...");
         CloseHandle(thread_handle);
-        VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+        VirtualFreeEx(process_handle, remote_memory, 0, MEM_RELEASE);
         CloseHandle(process_handle);
     }
     
