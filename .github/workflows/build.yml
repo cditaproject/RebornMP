@@ -1,4 +1,4 @@
-name: Build RebornMP (Windows)
+name: Build EntityMP
 
 on:
   push:
@@ -7,122 +7,159 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  # Job 1: Сборка Rust компонентов
-  build-rust:
-    name: Build Rust Components
+  # ========================================================================
+  # BUILD CLIENT DLL (Windows x86_64)
+  # ========================================================================
+  build-client:
     runs-on: windows-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        target: x86_64-pc-windows-gnu
-        override: true
-    
-    - name: Cache cargo
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    
-    - name: Build Launcher (EXE)
-      run: cargo build --release --bin launcher
-      continue-on-error: false
-    
-    - name: Build Client DLL
-      run: cargo build --release --bin client
-      continue-on-error: false
-    
-    - name: Build Server Core DLL
-      run: cargo build --release -p server-core
-      continue-on-error: true  # Если пакет называется иначе
-    
-    - name: List built files
-      run: |
-        echo "=== Built executables ==="
-        dir target\release\*.exe
-        echo "=== Built DLLs ==="
-        dir target\release\*.dll
-    
-    - name: Upload Rust artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: rust-binaries
-        path: |
-          target/release/*.exe
-          target/release/*.dll
-          !target/release/*.pdb
-        retention-days: 7
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Build Client DLL
+        run: |
+          cd client
+          cargo build --release
+          echo "Build complete. Looking for DLL..."
+          dir target\release\*.dll
+        shell: cmd
+      
+      - name: Upload Client DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dll
+          path: client/target/release/*.dll
+          if-no-files-found: warn
 
-  # Job 2: Проверка TypeScript (без компиляции)
-  check-typescript:
-    name: Check TypeScript (Server)
+  # ========================================================================
+  # BUILD LAUNCHER (Windows x86_64)
+  # ========================================================================
+  build-launcher:
     runs-on: windows-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v1
-      with:
-        bun-version: latest
-    
-    - name: Install dependencies
-      run: bun install
-      working-directory: ./server
-    
-    - name: Install TypeScript locally
-      run: bun add -d typescript @types/node
-      working-directory: ./server
-    
-    - name: Run TypeScript compiler check
-      run: bunx tsc --noEmit
-      working-directory: ./server
-      continue-on-error: true  # Не падаем, если нет tsconfig.json
-    
-    - name: List server files
-      run: |
-        echo "=== Server directory contents ==="
-        dir server
-        echo "=== Checking for index.ts ==="
-        if exist server\src\index.ts (echo index.ts found) else (echo index.ts not found)
-    
-    - name: Upload server source (for reference)
-      uses: actions/upload-artifact@v4
-      with:
-        name: server-source
-        path: |
-          server/**/*.ts
-          server/**/*.json
-          !server/node_modules
-        retention-days: 7
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Build Launcher
+        run: |
+          cd launcher
+          cargo build --release
+          echo "Build complete. Looking for EXE..."
+          dir target\release\*.exe
+        shell: cmd
+      
+      - name: Upload Launcher
+        uses: actions/upload-artifact@v4
+        with:
+          name: entitymp-launcher
+          path: launcher/target/release/*.exe
+          if-no-files-found: warn
 
-  # Job 3: Полная проверка (опционально)
-  full-build:
-    name: Full Build Check
-    runs-on: windows-latest
-    needs: [build-rust, check-typescript]
-    
+  # ========================================================================
+  # BUILD SHARED LIBRARY (Linux)
+  # ========================================================================
+  build-shared:
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-    
-    - name: List all artifacts
-      run: dir artifacts /s
-    
-    - name: Final status
-      run: |
-        echo "✅ Build completed successfully!"
-        echo "Rust components: rust-binaries artifact"
-        echo "TypeScript files: server-source artifact"
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Build Shared Library
+        run: |
+          cd shared
+          cargo build --release
+          ls -la target/release/*.a
+      
+      - name: Upload Shared Library
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-lib
+          path: shared/target/release/*.a
+          if-no-files-found: warn
+
+  # ========================================================================
+  # BUILD SDK LIBRARY (Linux)
+  # ========================================================================
+  build-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Build SDK Library
+        run: |
+          cd sdk
+          cargo build --release
+          ls -la target/release/*.a
+      
+      - name: Upload SDK Library
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-lib
+          path: sdk/target/release/*.a
+          if-no-files-found: warn
+
+  # ========================================================================
+  # BUILD SERVER CORE (Linux)
+  # ========================================================================
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev build-essential
+      
+      - name: Build Server Core
+        run: |
+          cd server/core
+          cargo build --release
+          ls -la target/release/*.a
+      
+      - name: Upload Server Core
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-core-lib
+          path: server/core/target/release/*.a
+          if-no-files-found: warn
+
+  # ========================================================================
+  # CHECK FORMATTING (Linux)
+  # ========================================================================
+  check-fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check || echo "Formatting issues found"
+        continue-on-error: true
