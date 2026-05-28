@@ -59,14 +59,13 @@ impl Logger {
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
             let message = format!("[{}] [{}] {}\n", timestamp, level_str, args);
             
-            // Цветной вывод в консоль
+            // Цветной вывод в консоль (исправлено: убран лишний _ =>)
             let color = match level {
                 LogLevel::DEBUG => "\x1b[36m",
                 LogLevel::INFO => "\x1b[32m",
                 LogLevel::SUCCESS => "\x1b[92m",
                 LogLevel::WARNING => "\x1b[33m",
                 LogLevel::ERROR => "\x1b[31m",
-                _ => "",
             };
             print!("{}{}\x1b[0m", color, message);
             
@@ -319,7 +318,7 @@ fn find_client_dll() -> Option<PathBuf> {
 /// Запуск GTA V
 fn launch_gta5(gta_path: &PathBuf, logger: &mut Logger) -> Result<Child, std::io::Error> {
     logger.debug(&format!("Executable: {}", gta_path.display()));
-    logger.debug("Working directory: {}", gta_path.parent().unwrap().display());
+    logger.debug(&format!("Working directory: {}", gta_path.parent().unwrap().display()));
     
     let game_dir = gta_path.parent().unwrap();
     
