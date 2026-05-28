@@ -1,5 +1,4 @@
 // client/src/hooks.rs
-// RebornMP Hooks with Chat Support
 
 use winapi::um::winuser::{GetAsyncKeyState, VK_RETURN, VK_BACK, VK_ESCAPE};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,13 +9,14 @@ static HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
 pub fn send_chat_message(msg: &str) {
     println!("[CHAT] Sending: {}", msg);
     // Здесь отправка на сервер
+    crate::ui::CHAT.add_message(format!("You: {}", msg), false);
 }
 
 pub fn install_hooks() -> bool {
     if HOOKS_INSTALLED.load(Ordering::SeqCst) {
         return true;
     }
-    println!("[Hooks] YimMenu-style hooks installed");
+    println!("[Hooks] Installed");
     HOOKS_INSTALLED.store(true, Ordering::SeqCst);
     true
 }
@@ -29,9 +29,8 @@ pub fn process_input() {
         
         if crate::ui::CHAT.is_input_open() {
             if GetAsyncKeyState(VK_RETURN) & 1 != 0 {
-                if let Some(msg) = crate::ui::CHAT.send_current_message() {
+                if let Some(msg) = crate::ui::CHAT.send_message() {
                     send_chat_message(&msg);
-                    crate::ui::CHAT.add_message(format!("You: {}", msg), false, "Local".to_string());
                 }
             }
             if GetAsyncKeyState(VK_ESCAPE) & 1 != 0 {
