@@ -1,7 +1,7 @@
 // client/src/webview_chat.rs
-// Правильная версия с корректным API webview2
+// Для версии webview2 0.1.4
 
-use webview2::{WebView, WebViewBuilder};
+use webview2::WebView;
 use winapi::um::winuser::*;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,10 +20,8 @@ pub fn init_webview() -> bool {
             return false;
         }
         
-        // Используем WebViewBuilder для создания
-        let webview = match WebViewBuilder::new()
-            .bounds(0, 0, 800, 600)
-            .build(Some(hwnd as usize)) {
+        // Создание WebView2 через WebView::new
+        let webview = match WebView::new(Some(hwnd as usize)) {
             Ok(wv) => {
                 println!("[WebView] Created successfully");
                 wv
@@ -63,7 +61,7 @@ pub fn init_webview() -> bool {
                 window.hideInput = function() { input.style.display = 'none'; input.value = ''; };
                 input.addEventListener('keypress', function(e) {
                     if (e.key === 'Enter' && input.value.trim()) {
-                        window.external.notify(input.value);
+                        window.external.sendMessage(input.value);
                         window.hideInput();
                     }
                 });
@@ -91,7 +89,7 @@ pub fn add_message(text: &str, is_system: bool) {
                 text.replace('"', "\\\"").replace('\n', " "),
                 if is_system { "true" } else { "false" }
             );
-            let _ = wv.execute_script(&js, |_| Ok(()));
+            let _ = wv.execute_script(&js);
         }
     });
 }
@@ -99,7 +97,7 @@ pub fn add_message(text: &str, is_system: bool) {
 pub fn show_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.execute_script("window.showInput();", |_| Ok(()));
+            let _ = wv.execute_script("window.showInput();");
         }
     });
 }
@@ -107,7 +105,7 @@ pub fn show_chat() {
 pub fn hide_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.execute_script("window.hideInput();", |_| Ok(()));
+            let _ = wv.execute_script("window.hideInput();");
         }
     });
 }
