@@ -7,10 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-winapi = { version = "0.3", features = [
-    "winuser",
-    "wingdi",
-    "winnt"
-] }
+winapi = { version = "0.3", features = ["winuser", "wingdi", "winnt"] }
 lazy_static = "1.4.0"
 webview2 = "0.1.4"
