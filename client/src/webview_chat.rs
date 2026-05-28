@@ -1,7 +1,7 @@
 // client/src/webview_chat.rs
-// WebView2 чат - правильная реализация по документации
+// WebView2 чат для версии 0.1.4
 
-use webview2::{EnvironmentBuilder, Controller, WebView};
+use webview2::{Environment, Controller, WebView};
 use winapi::um::winuser::*;
 use std::ptr;
 use std::cell::RefCell;
@@ -27,44 +27,58 @@ pub fn init_webview() -> bool {
         
         println!("[WebView] Creating environment...");
         
-        // Используем EnvironmentBuilder как в документации
-        let env = match EnvironmentBuilder::new()
-            .build() {
-            Ok(env) => {
-                println!("[WebView] Environment created");
-                env
-            }
+        // Создаём среду через builder
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        let result = Environment::builder()
+            .build(move |env_result| {
+                let _ = tx.send(env_result);
+                Ok(())
+            });
+        
+        if result.is_err() {
+            println!("[WebView] Failed to start builder");
+            return false;
+        }
+        
+        let env = match rx.recv().unwrap() {
+            Ok(env) => env,
             Err(e) => {
-                println!("[WebView] Failed to create environment: {:?}", e);
+                println!("[WebView] Environment error: {:?}", e);
                 return false;
             }
         };
+        
+        println!("[WebView] Environment created, creating controller...");
         
         // Создаём контроллер
-        let controller = match env.create_controller(hwnd as isize, None) {
-            Ok(c) => {
-                println!("[WebView] Controller created");
-                c
-            }
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        let _ = env.create_controller(hwnd as isize, move |controller_result| {
+            let _ = tx.send(controller_result);
+            Ok(())
+        });
+        
+        let controller = match rx.recv().unwrap() {
+            Ok(c) => c,
             Err(e) => {
-                println!("[WebView] Failed to create controller: {:?}", e);
+                println!("[WebView] Controller error: {:?}", e);
                 return false;
             }
         };
+        
+        println!("[WebView] Controller created, getting webview...");
         
         // Получаем WebView из контроллера
-        let webview = match controller.get_core_web_view2() {
-            Ok(wv) => {
-                println!("[WebView] WebView obtained");
-                wv
-            }
+        let webview = match controller.get_webview() {
+            Ok(wv) => wv,
             Err(e) => {
-                println!("[WebView] Failed to get WebView: {:?}", e);
+                println!("[WebView] Failed to get webview: {:?}", e);
                 return false;
             }
         };
         
-        // HTML интерфейс
+        // HTML интерфейс чата
         let html = r#"
         <!DOCTYPE html>
         <html style="background: transparent;">
@@ -99,7 +113,6 @@ pub fn init_webview() -> bool {
                 }
                 .system-message { color: #ffaa44; text-shadow: 0 0 2px rgba(0,0,0,0.5); }
                 .player-message { color: #44ff44; text-shadow: 0 0 2px rgba(0,0,0,0.5); }
-                .player-name { color: #ffaa44; font-weight: bold; }
                 #input-container {
                     position: fixed;
                     bottom: 20px;
@@ -155,12 +168,21 @@ pub fn init_webview() -> bool {
                     chatInput.value = '';
                 };
                 
-                chatInput.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter' && chatInput.value.trim()) {
-                        window.external.notify(chatInput.value);
+                window.sendMessage = function() {
+                    let msg = chatInput.value;
+                    if (msg.trim()) {
+                        window.external.notify(msg);
                         window.hideInput();
                     }
+                };
+                
+                chatInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        window.sendMessage();
+                    }
                 });
+                
+                console.log('WebView2 Chat Ready!');
             </script>
         </body>
         </html>
@@ -189,7 +211,7 @@ pub fn add_message(text: &str, is_system: bool) {
                 text.replace('"', "\\\"").replace('\n', " "),
                 if is_system { "true" } else { "false" }
             );
-            let _ = wv.execute_script(&js);
+            let _ = wv.execute_script(&js, |_| Ok(()));
         }
     });
 }
@@ -197,7 +219,7 @@ pub fn add_message(text: &str, is_system: bool) {
 pub fn show_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.execute_script("window.showInput();");
+            let _ = wv.execute_script("window.showInput();", |_| Ok(()));
         }
     });
 }
@@ -205,11 +227,7 @@ pub fn show_chat() {
 pub fn hide_chat() {
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.execute_script("window.hideInput();");
+            let _ = wv.execute_script("window.hideInput();", |_| Ok(()));
         }
     });
-}
-
-pub fn is_ready() -> bool {
-    INITIALIZED.with(|i| i.load(Ordering::Relaxed))
 }
