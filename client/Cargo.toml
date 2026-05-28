@@ -16,9 +16,8 @@ winapi = { version = "0.3", features = [
     "errhandlingapi",
     "libloaderapi",
     "winuser",
-    "basetsd"
+    "basetsd",
+    "wingdi",
+    "windowsx"
 ] }
 lazy_static = "1.4.0"
-imgui = "0.11"
-imgui-winit-support = "0.11"
-winit = "0.29"
