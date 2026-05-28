@@ -1,180 +1,434 @@
-#![cfg(windows)]
+// launcher/src/main.rs
+// RebornMP Launcher with detailed logging
 
-use std::env;
-use std::ffi::c_void;
+use std::process::{Command, Child};
 use std::path::PathBuf;
-use std::ptr::null_mut;
 use std::thread;
 use std::time::Duration;
-use sysinfo::System;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
+use winapi::um::winnt::{PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION, PROCESS_CREATE_THREAD};
+use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread};
+use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory, VirtualFreeEx};
+use winapi::um::libloaderapi::{GetModuleHandleA, GetProcAddress, LoadLibraryA};
+use winapi::um::handleapi::CloseHandle;
+use winapi::shared::minwindef::{DWORD, LPVOID, FARPROC, HMODULE, LPTHREAD_START_ROUTINE};
+use winapi::um::synchapi::WaitForSingleObject;
+use winapi::um::winbase::INFINITE;
 
-use windows::core::{PCWSTR, w};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx, VirtualFreeEx,
-};
-use windows::Win32::System::Threading::{
-    CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject, INFINITE, GetExitCodeThread
-};
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
+// ========== ЛОГГЕР С РАЗНЫМИ УРОВНЯМИ ==========
+#[derive(PartialEq, PartialOrd)]
+enum LogLevel {
+    DEBUG = 0,
+    INFO = 1,
+    SUCCESS = 2,
+    WARNING = 3,
+    ERROR = 4,
+}
 
-fn main() {
-    println!("FreeMode Launcher");
+struct Logger {
+    level: LogLevel,
+    file: Option<std::fs::File>,
+}
 
-    // Start Steam and Launch GTA V
-    println!("Launching GTA V via Steam...");
-    unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            w!("steam://run/271590"),
-            None,
-            None,
-            SW_SHOW,
-        );
+impl Logger {
+    fn new(level: LogLevel, log_to_file: bool) -> Self {
+        let file = if log_to_file {
+            let path = PathBuf::from("launcher_debug.log");
+            Some(std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(path)
+                .expect("Failed to create log file"))
+        } else {
+            None
+        };
+        
+        Logger { level, file }
     }
-
-    println!("Waiting for GTA5.exe to start...");
-    let mut sys = System::new_all();
-    let pid = loop {
-        sys.refresh_processes();
-        if let Some((pid, _)) = sys.processes().iter().find(|(_, p)| p.name() == "GTA5.exe") {
-            break pid.as_u32();
+    
+    fn log(&mut self, level: LogLevel, level_str: &str, args: std::fmt::Arguments) {
+        if level >= self.level {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let message = format!("[{}] [{}] {}\n", timestamp, level_str, args);
+            
+            // Вывод в консоль с цветом
+            let color = match level {
+                LogLevel::DEBUG => "\x1b[36m",      // Cyan
+                LogLevel::INFO => "\x1b[32m",       // Green
+                LogLevel::SUCCESS => "\x1b[92m",    // Bright green
+                LogLevel::WARNING => "\x1b[33m",    // Yellow
+                LogLevel::ERROR => "\x1b[31m",      // Red
+            };
+            print!("{}{}\x1b[0m", color, message);
+            
+            // Запись в файл если нужно
+            if let Some(file) = &mut self.file {
+                use std::io::Write;
+                let _ = file.write_all(message.as_bytes());
+                let _ = file.flush();
+            }
         }
-        thread::sleep(Duration::from_millis(500));
-    };
-
-    println!("Found GTA5.exe with PID: {}", pid);
+    }
     
-    // Give the process a moment to initialize
-    thread::sleep(Duration::from_secs(5));
+    macro_rules! debug { ($($arg:tt)*) => { self.log(LogLevel::DEBUG, "DEBUG", format_args!($($arg)*)) }; }
+    macro_rules! info { ($($arg:tt)*) => { self.log(LogLevel::INFO, "INFO", format_args!($($arg)*)) }; }
+    macro_rules! success { ($($arg:tt)*) => { self.log(LogLevel::SUCCESS, "SUCCESS", format_args!($($arg)*)) }; }
+    macro_rules! warning { ($($arg:tt)*) => { self.log(LogLevel::WARNING, "WARNING", format_args!($($arg)*)) }; }
+    macro_rules! error { ($($arg:tt)*) => { self.log(LogLevel::ERROR, "ERROR", format_args!($($arg)*)) }; }
+}
 
-    let mut current_dir = env::current_dir().expect("Failed to get current directory");
-    current_dir.push("client.dll");
+// ========== ОСНОВНАЯ ФУНКЦИЯ ==========
+fn main() {
+    let mut logger = Logger::new(LogLevel::DEBUG, true);
     
-    if !current_dir.exists() {
-        println!("Error: client.dll not found at {:?}", current_dir);
-        // Fallback: check if we are running via cargo run and try target/x86_64-pc-windows-msvc/debug/client.dll
-        current_dir = env::current_dir().unwrap();
-        current_dir.push("target");
-        current_dir.push("x86_64-pc-windows-msvc");
-        current_dir.push("debug");
-        current_dir.push("client.dll");
-        if !current_dir.exists() {
-            println!("Error: client.dll not found. Please place it in the same directory as the launcher.");
+    logger.info("========================================");
+    logger.info("RebornMP Launcher v0.1.0 - Debug Mode");
+    logger.info("========================================");
+    
+    // Проверка прав администратора
+    if !is_admin() {
+        logger.warning("Launcher not running as Administrator!");
+        logger.warning("DLL injection may fail. Run as Admin for best results.");
+        logger.debug("To run as Admin: Right-click -> Run as Administrator");
+    }
+    
+    // 1. Поиск GTA V
+    logger.info("Step 1: Locating Grand Theft Auto V...");
+    let gta_path = match find_gta5_path() {
+        Some(path) => {
+            logger.success(&format!("Found GTA V at: {}", path.display()));
+            path
+        },
+        None => {
+            logger.error("Could not find Grand Theft Auto V installation!");
+            logger.error("Search paths checked:");
+            logger.error("  - Steam: C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V");
+            logger.error("  - Epic: C:\\Program Files\\Epic Games\\GTAV");
+            logger.error("  - Rockstar: C:\\Program Files\\Rockstar Games\\Grand Theft Auto V");
+            logger.error("  - Registry: HKLM\\Software\\Rockstar Games\\Grand Theft Auto V");
+            logger.info("Please install GTA V or specify path manually.");
             return;
         }
+    };
+    
+    // 2. Поиск client.dll
+    logger.info("Step 2: Locating RebornMP client.dll...");
+    let client_dll_path = match find_client_dll() {
+        Some(path) => {
+            logger.success(&format!("Found client.dll at: {}", path.display()));
+            
+            // Проверка размера файла
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                logger.debug(&format!("File size: {} bytes", metadata.len()));
+                if metadata.len() == 0 {
+                    logger.error("client.dll is empty! Build failed?");
+                    return;
+                }
+            }
+            
+            path
+        },
+        None => {
+            logger.error("Could not find RebornMP client.dll!");
+            logger.error("Expected locations:");
+            logger.error("  - ./client.dll");
+            logger.error("  - ../target/release/client.dll");
+            logger.error("  - ./target/release/client.dll");
+            logger.info("Please build the project first: cargo build --release");
+            return;
+        }
+    };
+    
+    // 3. Запуск GTA V
+    logger.info("Step 3: Launching Grand Theft Auto V...");
+    let game_process = match launch_gta5(&gta_path, &mut logger) {
+        Ok(process) => {
+            logger.success(&format!("Game launched with PID: {}", process.id()));
+            process
+        },
+        Err(e) => {
+            logger.error(&format!("Failed to launch GTA V: {}", e));
+            return;
+        }
+    };
+    
+    // 4. Ожидание загрузки игры
+    logger.info("Step 4: Waiting for game to fully load...");
+    logger.debug("Waiting 5 seconds for initial loading...");
+    thread::sleep(Duration::from_secs(5));
+    
+    // 5. Инъекция DLL
+    logger.info("Step 5: Injecting client.dll into game process...");
+    match inject_dll(&game_process, &client_dll_path, &mut logger) {
+        Ok(_) => {
+            logger.success("Successfully injected client.dll!");
+            logger.info("The mod should now be active in game.");
+        },
+        Err(e) => {
+            logger.error(&format!("Injection failed: {}", e));
+            logger.error("Possible causes:");
+            logger.error("  - Antivirus blocking injection");
+            logger.error("  - Game is protected (BattlEye)");
+            logger.error("  - Insufficient permissions (run as Admin)");
+            logger.error("  - Architecture mismatch (x64 required)");
+        }
     }
-
-    let dll_path = current_dir.to_str().unwrap();
-    println!("Injecting: {}", dll_path);
-
-    if inject_dll(pid, dll_path) {
-        println!("Successfully injected!");
-    } else {
-        println!("Injection failed.");
+    
+    // 6. Завершение
+    logger.info("========================================");
+    logger.info("Launcher work completed!");
+    logger.info("Log saved to: launcher_debug.log");
+    logger.info("Press Ctrl+C to exit launcher");
+    logger.info("========================================");
+    
+    // Ждём завершения игры
+    logger.debug("Monitoring game process (will exit when game closes)...");
+    loop {
+        thread::sleep(Duration::from_secs(5));
+        if let Ok(exit_code) = game_process.try_wait() {
+            if exit_code.is_some() {
+                logger.info("Game process has terminated. Exiting...");
+                break;
+            }
+        }
+        
+        // Проверяем, жив ли процесс (дополнительная проверка)
+        if let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION, 0, game_process.id()) {
+            let mut exit_code: DWORD = 0;
+            unsafe {
+                winapi::um::processthreadsapi::GetExitCodeProcess(handle, &mut exit_code);
+                CloseHandle(handle);
+            }
+            if exit_code != 259 { // STILL_ACTIVE
+                logger.info("Game process has exited. Exiting...");
+                break;
+            }
+        }
     }
 }
 
-fn inject_dll(pid: u32, dll_path: &str) -> bool {
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+/// Проверка прав администратора
+fn is_admin() -> bool {
+    use winapi::um::securitybaseapi::*;
+    use winapi::um::winbase::GetCurrentProcess;
+    use winapi::um::winnt::TOKEN_QUERY;
+    
+    let mut handle = std::ptr::null_mut();
     unsafe {
-        // Open the target process
-        let process_handle = OpenProcess(PROCESS_ALL_ACCESS, false, pid).unwrap_or_default();
-        if process_handle.is_invalid() {
-            println!("Failed to open process. Are you running as administrator?");
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle);
+        if handle.is_null() {
             return false;
         }
+        
+        let mut elevation = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let result = GetTokenInformation(handle, TokenElevation, 
+                                         &mut elevation as *mut _ as *mut _,
+                                         size, &mut size);
+        CloseHandle(handle);
+        result != 0 && elevation != 0
+    }
+}
 
-        // Allocate memory for the DLL path in the target process (UTF-16)
-        let wide_path: Vec<u16> = OsStr::new(dll_path).encode_wide().chain(std::iter::once(0)).collect();
-        let path_len = wide_path.len() * 2;
-        let remote_mem = VirtualAllocEx(
-            process_handle,
-            None,
-            path_len,
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_READWRITE,
+/// Поиск пути к GTA V
+fn find_gta5_path() -> Option<PathBuf> {
+    // Список возможных путей
+    let paths = vec![
+        PathBuf::from("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
+        PathBuf::from("C:\\Program Files\\Epic Games\\GTAV\\PlayGTAV.exe"),
+        PathBuf::from("C:\\Program Files\\Rockstar Games\\Grand Theft Auto V\\PlayGTAV.exe"),
+        PathBuf::from("D:\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe"),
+        PathBuf::from(".\\PlayGTAV.exe"),
+    ];
+    
+    for path in paths {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    
+    // Попытка найти через реестр
+    #[cfg(windows)]
+    {
+        use winreg::RegKey;
+        use winreg::enums::*;
+        
+        let hkml = RegKey::predef(HKEY_LOCAL_MACHINE);
+        if let Ok(key) = hkml.open_subkey(r"SOFTWARE\Rockstar Games\Grand Theft Auto V") {
+            if let Ok(path) = key.get_value::<String, _>("InstallFolder") {
+                let exe_path = PathBuf::from(path).join("PlayGTAV.exe");
+                if exe_path.exists() {
+                    return Some(exe_path);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+/// Поиск client.dll
+fn find_client_dll() -> Option<PathBuf> {
+    let paths = vec![
+        PathBuf::from(".\\client.dll"),
+        PathBuf::from("..\\target\\release\\client.dll"),
+        PathBuf::from(".\\target\\release\\client.dll"),
+        PathBuf::from("..\\..\\target\\release\\client.dll"),
+    ];
+    
+    for path in paths {
+        if path.exists() {
+            return Some(path.canonicalize().unwrap_or(path));
+        }
+    }
+    
+    None
+}
+
+/// Запуск GTA V
+fn launch_gta5(gta_path: &PathBuf, logger: &mut Logger) -> Result<Child, std::io::Error> {
+    logger.debug(&format!("Executable: {}", gta_path.display()));
+    logger.debug("Working directory: {}", gta_path.parent().unwrap().display());
+    
+    let game_dir = gta_path.parent().unwrap();
+    
+    // Параметры запуска (отключаем BattlEye для одиночной игры)
+    let args = ["-noBattleEye", "-scOfflineOnly"];
+    logger.debug(&format!("Launch arguments: {:?}", args));
+    
+    let process = Command::new(gta_path)
+        .args(&args)
+        .current_dir(game_dir)
+        .spawn()?;
+    
+    Ok(process)
+}
+
+/// Инъекция DLL в процесс
+fn inject_dll(process: &Child, dll_path: &PathBuf, logger: &mut Logger) -> Result<(), String> {
+    let pid = process.id();
+    logger.debug(&format!("Target PID: {}", pid));
+    
+    // Открываем процесс с максимальными правами
+    unsafe {
+        logger.debug("Opening process with full access...");
+        let process_handle = OpenProcess(
+            PROCESS_ALL_ACCESS | PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | 
+            PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
+            0,
+            pid
         );
-
-        if remote_mem.is_null() {
-            println!("Failed to allocate memory in target process.");
-            CloseHandle(process_handle).ok();
-            return false;
+        
+        if process_handle.is_null() {
+            let error = std::io::Error::last_os_error();
+            logger.error(&format!("OpenProcess failed: {:?}", error));
+            return Err(format!("Failed to open process: {}", error));
         }
-
-        // Write the DLL path into the allocated memory
+        logger.success("Process opened successfully");
+        
+        // Получаем путь к DLL в формате UTF-16 (Windows)
+        let dll_path_str = dll_path.to_str().unwrap();
+        logger.debug(&format!("DLL path: {}", dll_path_str));
+        
+        // Выделяем память в процессе для пути DLL
+        logger.debug("Allocating memory in target process...");
+        let dll_path_wide: Vec<u16> = dll_path_str.encode_utf16().chain(Some(0)).collect();
+        let dll_path_size = dll_path_wide.len() * 2;
+        
+        let remote_memory = VirtualAllocEx(
+            process_handle,
+            std::ptr::null_mut(),
+            dll_path_size,
+            winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
+            winapi::um::winnt::PAGE_READWRITE
+        );
+        
+        if remote_memory.is_null() {
+            let error = std::io::Error::last_os_error();
+            logger.error(&format!("VirtualAllocEx failed: {:?}", error));
+            CloseHandle(process_handle);
+            return Err(format!("Failed to allocate memory: {}", error));
+        }
+        logger.success(&format!("Memory allocated at: {:p}", remote_memory));
+        
+        // Записываем путь DLL в память процесса
+        logger.debug("Writing DLL path to process memory...");
         let mut bytes_written = 0;
-        let write_result = WriteProcessMemory(
+        let result = WriteProcessMemory(
             process_handle,
-            remote_mem,
-            wide_path.as_ptr() as *const c_void,
-            path_len,
-            Some(&mut bytes_written),
+            remote_memory,
+            dll_path_wide.as_ptr() as LPVOID,
+            dll_path_size,
+            &mut bytes_written
         );
-
-        if write_result.is_err() {
-            println!("Failed to write to process memory.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
+        
+        if result == 0 {
+            let error = std::io::Error::last_os_error();
+            logger.error(&format!("WriteProcessMemory failed: {:?}", error));
+            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            CloseHandle(process_handle);
+            return Err(format!("Failed to write memory: {}", error));
         }
-
-        // Get the address of LoadLibraryA from kernel32.dll
-        let kernel32 = GetModuleHandleW(w!("kernel32.dll")).unwrap_or_default();
-        if kernel32.is_invalid() {
-            println!("Failed to get handle to kernel32.dll.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
+        logger.success(&format!("Wrote {} bytes to remote process", bytes_written));
+        
+        // Получаем адрес LoadLibraryA в kernel32.dll
+        logger.debug("Getting LoadLibraryA address...");
+        let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr() as *const i8);
+        if kernel32.is_null() {
+            logger.error("Failed to get kernel32.dll handle");
+            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            CloseHandle(process_handle);
+            return Err("Failed to get kernel32.dll".to_string());
         }
-
-        let load_library_addr = GetProcAddress(kernel32, windows::core::s!("LoadLibraryW"));
-        if load_library_addr.is_none() {
-            println!("Failed to find LoadLibraryW.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
+        
+        let load_library_addr = GetProcAddress(kernel32, b"LoadLibraryA\0".as_ptr() as *const i8);
+        if load_library_addr.is_null() {
+            logger.error("Failed to get LoadLibraryA address");
+            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            CloseHandle(process_handle);
+            return Err("Failed to get LoadLibraryA".to_string());
         }
-
-        // Create a remote thread that executes LoadLibraryW with the address of our allocated memory
+        logger.success(&format!("LoadLibraryA at: {:p}", load_library_addr));
+        
+        // Создаём удалённый поток для загрузки DLL
+        logger.debug("Creating remote thread to load DLL...");
+        let thread_id = 0u32;
         let thread_handle = CreateRemoteThread(
             process_handle,
-            None,
+            std::ptr::null_mut(),
             0,
-            Some(std::mem::transmute(load_library_addr)),
-            Some(remote_mem),
+            Some(std::mem::transmute::<FARPROC, LPTHREAD_START_ROUTINE>(load_library_addr)),
+            remote_memory,
             0,
-            None,
-        ).unwrap_or_default();
-
-        if thread_handle.is_invalid() {
-            println!("Failed to create remote thread.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
+            &mut thread_id as *mut DWORD
+        );
+        
+        if thread_handle.is_null() {
+            let error = std::io::Error::last_os_error();
+            logger.error(&format!("CreateRemoteThread failed: {:?}", error));
+            VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+            CloseHandle(process_handle);
+            return Err(format!("Failed to create remote thread: {}", error));
         }
-
-        // Wait for the thread to finish
-        WaitForSingleObject(thread_handle, INFINITE);
-
-        let mut exit_code = 0;
-        GetExitCodeThread(thread_handle, &mut exit_code).ok();
-
-        // Cleanup
-        CloseHandle(thread_handle).ok();
-        VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-        CloseHandle(process_handle).ok();
-
-        if exit_code == 0 {
-            println!("LoadLibraryW failed inside the target process. Exit code: {}", exit_code);
-            return false;
+        logger.success(&format!("Remote thread created, ID: {}", thread_id));
+        
+        // Ждём завершения потока (DLL загрузилась)
+        logger.debug("Waiting for remote thread to complete...");
+        let wait_result = WaitForSingleObject(thread_handle, INFINITE);
+        if wait_result != 0 {
+            logger.warning(&format!("WaitForSingleObject returned: {}", wait_result));
+        } else {
+            logger.success("Remote thread completed - DLL loaded successfully!");
         }
-
-        true
+        
+        // Очистка
+        logger.debug("Cleaning up...");
+        CloseHandle(thread_handle);
+        VirtualFreeEx(process_handle, remote_memory, 0, winapi::um::winnt::MEM_RELEASE);
+        CloseHandle(process_handle);
     }
+    
+    Ok(())
 }
