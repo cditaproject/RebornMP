@@ -8,25 +8,29 @@ use winapi::um::winuser::GetAsyncKeyState;
 
 mod webview_chat;
 
-use webview_chat::{init_webview, add_message, show_chat, hide_chat, is_chat_visible};
+use webview_chat::{init_webview, add_message, show_chat, hide_chat, is_ready};
 
 #[no_mangle]
 pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut c_void) -> u32 {
     match reason {
         DLL_PROCESS_ATTACH => {
             thread::spawn(|| {
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(2));
                 
                 init_webview();
                 add_message("RebornMP Loaded! Press T to chat", true);
                 
+                let mut chat_open = false;
+                
                 loop {
                     unsafe {
-                        if GetAsyncKeyState(0x54) & 1 != 0 { // VK_T
-                            if is_chat_visible() {
+                        if GetAsyncKeyState(0x54) & 1 != 0 {
+                            if chat_open {
                                 hide_chat();
+                                chat_open = false;
                             } else {
                                 show_chat();
+                                chat_open = true;
                             }
                         }
                     }
