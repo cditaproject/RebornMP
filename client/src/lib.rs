@@ -1,5 +1,4 @@
 // client/src/lib.rs
-// RebornMP Client - С чатом поверх игры!
 
 use std::ffi::c_void;
 use std::thread;
