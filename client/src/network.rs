@@ -1,5 +1,5 @@
 // client/src/network.rs
-// Максимально простая рабочая версия
+// RebornMP Network Client - Final Working Version
 
 use std::net::TcpStream;
 use std::io::{Read, Write};
@@ -27,17 +27,18 @@ impl NetworkClient {
     
     pub fn connect(&mut self, server_ip: &str) -> bool {
         match TcpStream::connect(server_ip) {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 println!("[Network] Connected to {}", server_ip);
-                self.connected = true;
                 
+                // Клонируем stream для потока
+                let mut read_stream = stream.try_clone().unwrap();
                 let tx = self.message_sender.clone();
                 
                 // Поток чтения
                 thread::spawn(move || {
                     let mut buf = [0u8; 4096];
                     loop {
-                        match stream.read(&mut buf) {
+                        match read_stream.read(&mut buf) {
                             Ok(n) if n > 0 => {
                                 let msg = String::from_utf8_lossy(&buf[..n]).to_string();
                                 let _ = tx.send(msg);
@@ -48,7 +49,9 @@ impl NetworkClient {
                     }
                 });
                 
+                // Сохраняем оригинальный stream для отправки
                 self.stream = Some(stream);
+                self.connected = true;
                 true
             }
             Err(e) => {
@@ -89,6 +92,7 @@ impl NetworkClient {
     pub fn disconnect(&mut self) {
         self.connected = false;
         self.stream = None;
+        println!("[Network] Disconnected");
     }
     
     pub fn is_connected(&self) -> bool {
