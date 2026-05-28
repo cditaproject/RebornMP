@@ -1,4 +1,5 @@
 // client/src/hooks.rs
+// RebornMP Hooks Manager
 
 use winapi::um::winuser::{GetAsyncKeyState, VK_RETURN, VK_BACK, VK_ESCAPE};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +11,7 @@ pub fn install_hooks() -> bool {
     if HOOKS_INSTALLED.load(Ordering::SeqCst) {
         return true;
     }
-    println!("[Hooks] Installed");
+    println!("[Hooks] Keyboard hooks installed");
     HOOKS_INSTALLED.store(true, Ordering::SeqCst);
     true
 }
@@ -25,6 +26,7 @@ pub fn process_input() {
             if GetAsyncKeyState(VK_RETURN) & 1 != 0 {
                 if let Some(msg) = crate::ui::CHAT.send_message() {
                     crate::ui::CHAT.add_message(format!("You: {}", msg), false);
+                    // TODO: Отправить на сервер
                 }
             }
             if GetAsyncKeyState(VK_ESCAPE) & 1 != 0 {
