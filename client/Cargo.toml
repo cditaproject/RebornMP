@@ -19,5 +19,6 @@ winapi = { version = "0.3", features = [
     "basetsd"
 ] }
 lazy_static = "1.4.0"
-webview2 = { version = "0.1.4" }
-windows = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+imgui = "0.11"
+imgui-winit-support = "0.11"
+winit = "0.29"
