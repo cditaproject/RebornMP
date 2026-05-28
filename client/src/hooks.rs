@@ -1,5 +1,4 @@
 // client/src/hooks.rs
-// RebornMP Hooks Manager
 
 use winapi::um::winuser::{GetAsyncKeyState, VK_RETURN, VK_BACK, VK_ESCAPE};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +25,6 @@ pub fn process_input() {
             if GetAsyncKeyState(VK_RETURN) & 1 != 0 {
                 if let Some(msg) = crate::ui::CHAT.send_message() {
                     crate::ui::CHAT.add_message(format!("You: {}", msg), false);
-                    // TODO: Отправить на сервер
                 }
             }
             if GetAsyncKeyState(VK_ESCAPE) & 1 != 0 {
