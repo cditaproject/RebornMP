@@ -1,25 +1,23 @@
 // client/src/ui.rs
-// RebornMP Chat - Like YimMenuV2
+// RebornMP UI Manager - ImGui Working Version
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use lazy_static::lazy_static;
-use imgui::{Context, Window, ImString, Condition};
+use std::cell::RefCell;
 
 #[derive(Clone)]
 pub struct ChatMessage {
     pub text: String,
     pub timestamp: u64,
     pub is_system: bool,
-    pub sender: String,
 }
 
 pub struct ChatManager {
     messages: Mutex<VecDeque<ChatMessage>>,
     input_buffer: Mutex<String>,
     is_open: Mutex<bool>,
-    imgui_ctx: Mutex<Option<Context>>,
 }
 
 impl ChatManager {
@@ -28,38 +26,23 @@ impl ChatManager {
             messages: Mutex::new(VecDeque::with_capacity(100)),
             input_buffer: Mutex::new(String::new()),
             is_open: Mutex::new(false),
-            imgui_ctx: Mutex::new(None),
         }
     }
     
-    pub fn init_imgui(&self) {
-        let mut ctx = Context::create();
-        
-        // Настройка стиля как в YimMenu
-        let style = ctx.style_mut();
-        style.window_rounding = 5.0;
-        style.window_padding = [10.0, 10.0];
-        style.colors[imgui::StyleColor::WindowBg] = [0.0, 0.0, 0.0, 0.8];
-        style.colors[imgui::StyleColor::Text] = [1.0, 1.0, 1.0, 1.0];
-        
-        *self.imgui_ctx.lock().unwrap() = Some(ctx);
-        println!("[UI] ImGui initialized (YimMenu style)");
-    }
-    
-    pub fn add_message(&self, text: String, is_system: bool, sender: String) {
+    pub fn add_message(&self, text: String, is_system: bool) {
         let mut messages = self.messages.lock().unwrap();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         
-        messages.push_back(ChatMessage { text, timestamp, is_system, sender });
+        messages.push_back(ChatMessage { text: text.clone(), timestamp, is_system });
         
         while messages.len() > 50 {
             messages.pop_front();
         }
         
-        println!("[CHAT] {}", messages.back().unwrap().text);
+        println!("[{}] {}", if is_system { "SYS" } else { "CHAT" }, text);
     }
     
     pub fn toggle_input(&self) {
@@ -74,6 +57,10 @@ impl ChatManager {
         *self.is_open.lock().unwrap()
     }
     
+    pub fn get_input_text(&self) -> String {
+        self.input_buffer.lock().unwrap().clone()
+    }
+    
     pub fn add_char(&self, c: char) {
         if *self.is_open.lock().unwrap() {
             self.input_buffer.lock().unwrap().push(c);
@@ -86,7 +73,7 @@ impl ChatManager {
         }
     }
     
-    pub fn send_current_message(&self) -> Option<String> {
+    pub fn send_message(&self) -> Option<String> {
         if *self.is_open.lock().unwrap() {
             let msg = self.input_buffer.lock().unwrap().clone();
             if !msg.is_empty() {
@@ -99,58 +86,82 @@ impl ChatManager {
         None
     }
     
-    pub fn render(&self, ui: &imgui::Ui) {
-        // Окно чата (как в YimMenu)
-        let messages = self.messages.lock().unwrap();
-        let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
-        
-        Window::new(ImString::new("RebornMP Chat"))
-            .size([400.0, 300.0], Condition::FirstUseEver)
-            .position([20.0, 100.0], Condition::FirstUseEver)
-            .bg_alpha(0.8)
-            .build(ui, || {
-                // История сообщений
-                for msg in messages.iter().skip(start) {
-                    let color = if msg.is_system {
-                        [1.0, 0.8, 0.2, 1.0]  // Жёлтый для системы
-                    } else {
-                        [0.2, 1.0, 0.2, 1.0]  // Зелёный для игроков
-                    };
-                    ui.text_colored(color, &msg.text);
-                }
-            });
-        
-        // Поле ввода (когда открыто)
-        if *self.is_open.lock().unwrap() {
-            let mut input = self.input_buffer.lock().unwrap().clone();
-            
-            Window::new(ImString::new("Chat Input"))
-                .size([400.0, 60.0], Condition::FirstUseEver)
-                .position([20.0, 420.0], Condition::FirstUseEver)
-                .title_bar(false)
-                .build(ui, || {
-                    ui.input_text(ImString::new("##chat_input"), &mut input)
-                        .enter_returns_true(true)
-                        .build();
-                    
-                    if ui.button(ImString::new("Send"), [80.0, 25.0]) {
-                        if let Some(msg) = self.send_current_message() {
-                            crate::hooks::send_chat_message(&msg);
-                        }
-                    }
-                    
-                    ui.same_line();
-                    
-                    if ui.button(ImString::new("Close"), [80.0, 25.0]) {
-                        *self.is_open.lock().unwrap() = false;
-                    }
-                    
-                    *self.input_buffer.lock().unwrap() = input;
-                });
-        }
+    pub fn get_messages(&self) -> Vec<ChatMessage> {
+        self.messages.lock().unwrap().iter().cloned().collect()
     }
 }
 
 lazy_static! {
     pub static ref CHAT: ChatManager = ChatManager::new();
+}
+
+// ImGui рендеринг - не храним в static!
+thread_local! {
+    static IMGUI_CONTEXT: RefCell<Option<imgui::Context>> = RefCell::new(None);
+}
+
+pub fn init_imgui() {
+    IMGUI_CONTEXT.with(|ctx| {
+        let mut ctx_borrow = ctx.borrow_mut();
+        if ctx_borrow.is_none() {
+            *ctx_borrow = Some(imgui::Context::create());
+            println!("[UI] ImGui initialized");
+        }
+    });
+}
+
+pub fn render_imgui() {
+    IMGUI_CONTEXT.with(|ctx| {
+        if let Some(ref mut imgui_ctx) = *ctx.borrow_mut() {
+            let ui = imgui_ctx.frame();
+            
+            // Окно чата
+            imgui::Window::new("RebornMP Chat")
+                .size([400.0, 300.0], imgui::Condition::FirstUseEver)
+                .position([20.0, 100.0], imgui::Condition::FirstUseEver)
+                .build(&ui, || {
+                    let messages = CHAT.get_messages();
+                    let start = if messages.len() > 15 { messages.len() - 15 } else { 0 };
+                    
+                    for msg in messages.iter().skip(start) {
+                        let color = if msg.is_system {
+                            [1.0, 0.8, 0.2, 1.0]
+                        } else {
+                            [0.2, 1.0, 0.2, 1.0]
+                        };
+                        ui.text_colored(color, &msg.text);
+                    }
+                });
+            
+            // Поле ввода
+            if CHAT.is_input_open() {
+                let mut input = CHAT.get_input_text();
+                
+                imgui::Window::new("Chat Input")
+                    .size([400.0, 60.0], imgui::Condition::FirstUseEver)
+                    .position([20.0, 420.0], imgui::Condition::FirstUseEver)
+                    .title_bar(false)
+                    .build(&ui, || {
+                        if ui.input_text("##input", &mut input).enter_returns_true(true).build() {
+                            if let Some(msg) = CHAT.send_message() {
+                                // Отправка сообщения
+                                crate::hooks::send_chat_message(&msg);
+                            }
+                        }
+                        
+                        if ui.button("Send", [80.0, 25.0]) {
+                            if let Some(msg) = CHAT.send_message() {
+                                crate::hooks::send_chat_message(&msg);
+                            }
+                        }
+                        
+                        ui.same_line();
+                        
+                        if ui.button("Close", [80.0, 25.0]) {
+                            CHAT.toggle_input();
+                        }
+                    });
+            }
+        }
+    });
 }
