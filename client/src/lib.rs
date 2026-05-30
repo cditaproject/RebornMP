@@ -15,6 +15,9 @@ pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut
             console::log("     RebornMP - Client Injected!");
             console::log("========================================");
             
+            // Инициализируем сканер памяти
+            memory::init();
+            
             thread::spawn(|| {
                 thread::sleep(Duration::from_secs(2));
                 network::start_client();

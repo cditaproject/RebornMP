@@ -20,14 +20,17 @@ pub fn start_client() {
                                 let msg = String::from_utf8_lossy(&buffer[..n]);
                                 println!("📩 Received: {}", msg);
                                 
-                                if msg.contains("\"freeMode\"") || msg.contains("\"disableStory\"") {
-                                    memory::disable_story();
+                                if msg.contains("\"disableStory\"") {
+                                        memory::disable_story();
+                                        thread::sleep(Duration::from_millis(500));
+                                        memory::exit_story_mode();  // <-- принудительный выход из сюжета
                                 }
                                 if msg.contains("\"spawn\"") {
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
                                     memory::teleport_to_spawn();
                                 }
                             }
-                            Err(e) => break,
+                            Err(_e) => break,
                         }
                     }
                 }
