@@ -72,9 +72,9 @@ fn main() {
 
 fn find_game_path() -> String {
     let paths = [
-        "C:\\Program Files\\Rockstar Games\\Grand Theft Auto V\\GTA5.exe",
-        "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\GTA5.exe",
-        "D:\\SteamLibrary\\steamapps\\common\\Grand Theft Auto V\\GTA5.exe",
+        "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe",
+        "D:\\SteamLibrary\\steamapps\\common\\Grand Theft Auto V\\PlayGTAV.exe",
+        "C:\\Program Files\\Rockstar Games\\Grand Theft Auto V\\PlayGTAV.exe",
     ];
     
     for path in paths {
@@ -83,7 +83,7 @@ fn find_game_path() -> String {
         }
     }
     
-    println!("Не удалось найти GTA V. Введите путь к GTA5.exe:");
+    println!("Не удалось найти GTA V. Введите путь к PlayGTAV.exe:");
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).unwrap();
     input.trim().to_string()
