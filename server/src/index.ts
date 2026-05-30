@@ -1,46 +1,57 @@
-import { dlopen, suffix } from 'bun:ffi';
-import { join } from 'path';
-import { existsSync } from 'fs';
+import * as net from 'net';
 
-console.log('EntityMP Server starting...');
+const PORT = 8080;
+const SPAWN_POINT = { x: -1038.5, y: -2745.0, z: 20.0 };
 
-// Правильный путь к release сборке
-const libPath = join('C:/GitHub/Test/RebornMP/target/release', `server_core.${suffix}`);
-
-console.log(`Loading Rust server core from: ${libPath}`);
-
-// Проверяем существование файла
-if (!existsSync(libPath)) {
-    console.error(`❌ Library not found at: ${libPath}`);
-    console.error('\nPlease build first with:');
-    console.error('  cd C:\\GitHub\\Test\\RebornMP');
-    console.error('  cargo build --release --package server_core');
-    process.exit(1);
-}
-
-try {
-    const serverLib = dlopen(libPath, {
-        start_server: {
-            args: ['u16'],
-            returns: 'void'
-        }
+const server = net.createServer((socket) => {
+    console.log(`[Server] Client connected from ${socket.remoteAddress}`);
+    
+    // 1. Отправляем режим свободной игры
+    socket.write(JSON.stringify({
+        type: "freeMode",
+        data: true
+    }) + '\n');
+    
+    // 2. Отправляем команду телепортации на спавн
+    setTimeout(() => {
+        socket.write(JSON.stringify({
+            type: "spawn",
+            data: SPAWN_POINT
+        }) + '\n');
+        console.log(`[Server] Sent spawn command to client`);
+    }, 1000);
+    
+    // 3. Отключаем сюжет
+    socket.write(JSON.stringify({
+        type: "disableStory",
+        data: true
+    }) + '\n');
+    
+    // Обработка сообщений от клиента
+    socket.on('data', (data) => {
+        const msg = data.toString();
+        console.log(`[Server] Received: ${msg}`);
+        
+        // Отправляем подтверждение
+        socket.write(JSON.stringify({
+            type: "ack",
+            data: "received"
+        }) + '\n');
     });
     
-    console.log('✅ Rust server core bound successfully!');
-    console.log('[TS] Starting TCP server on port 7777...');
-    serverLib.symbols.start_server(7777);
+    socket.on('error', (err) => {
+        console.log(`[Server] Error: ${err.message}`);
+    });
     
-    console.log('[TS] Server is running on 127.0.0.1:7777');
-    console.log('[TS] Press Ctrl+C to stop.');
-    
-    // Держим процесс активным
-    setInterval(() => {}, 1000);
-    
-} catch (error) {
-    console.error('❌ Failed to load Rust library:', error);
-    console.error('\nPossible issues:');
-    console.error('1. Missing Visual C++ Redistributable');
-    console.error('2. Library architecture mismatch (x64 vs x86)');
-    console.error('3. Missing dependencies');
-    process.exit(1);
-}
+    socket.on('close', () => {
+        console.log(`[Server] Client disconnected`);
+    });
+});
+
+server.listen(PORT, '127.0.0.1', () => {
+    console.log(`========================================`);
+    console.log(`   RebornMP Server running on port ${PORT}`);
+    console.log(`   Free Mode Active`);
+    console.log(`   Spawn point: ${SPAWN_POINT.x}, ${SPAWN_POINT.y}`);
+    console.log(`========================================`);
+});
