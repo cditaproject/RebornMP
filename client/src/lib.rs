@@ -1,5 +1,6 @@
-mod console;
+mod memory;
 mod network;
+mod console;
 
 use std::ffi::c_void;
 use std::thread;

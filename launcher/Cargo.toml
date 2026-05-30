@@ -8,4 +8,8 @@ name = "launcher"
 path = "src/main.rs"
 
 [dependencies]
-winapi = { version = "0.3", features = ["tlhelp32", "processthreadsapi", "memoryapi", "handleapi", "errhandlingapi", "synchapi", "libloaderapi", "winnt", "minwindef"] }
+winapi = { version = "0.3", features = [
+    "tlhelp32", "processthreadsapi", "memoryapi", 
+    "handleapi", "errhandlingapi", "synchapi", 
+    "libloaderapi", "winnt", "minwindef", "psapi"
+] }

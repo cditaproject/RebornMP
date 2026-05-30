@@ -4,51 +4,68 @@ use std::thread;
 use std::time::Duration;
 use winapi::um::tlhelp32::{CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS};
 use winapi::um::processthreadsapi::{OpenProcess, CreateRemoteThread};
-use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory};
+use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory, VirtualProtect, VirtualQueryEx, ReadProcessMemory};
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress};
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::shared::minwindef::{TRUE, FALSE};
-use winapi::um::winnt::{PROCESS_ALL_ACCESS, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
+use winapi::um::winnt::{PROCESS_ALL_ACCESS, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, PAGE_EXECUTE_READWRITE};
+use winapi::shared::ntdef::HANDLE;
+use winapi::um::winnt::MEMORY_BASIC_INFORMATION;
 
 fn main() {
-    println!("=== RebornMP Launcher ===");
-    println!("Поиск GTA V...");
+    println!("========================================");
+    println!("     RebornMP Launcher v1.0");
+    println!("========================================\n");
     
+    println!("[1/5] Поиск GTA V...");
     let game_path = find_game_path();
-    println!("Найден GTA V: {}", game_path);
+    println!("      Найден: {}", game_path);
     
-    println!("Запуск GTA V...");
+    println!("[2/5] Запуск GTA V с параметрами...");
     let _game = Command::new(&game_path)
-        .arg("-scOfflineOnly")      // Офлайн режим
-        .arg("-skipPatcherCheck")   // Пропустить проверку лаунчера
-        .arg("-noSocialClub")       // Отключить Social Club (работает не всегда)
-        .arg("-nobattleye")         // Отключить BattlEye
-        .arg("-useLevelFast")       // Быстрая загрузка
-        .arg("-verify")              // Пропустить проверку файлов
+        .arg("-scOfflineOnly")
+        .arg("-noSocialClub")
+        .arg("-skipPatcherCheck")
+        .arg("-nobattleye")
+        .arg("-useLevelFast")
+        .arg("-verify")
+        .arg("-ignoreDifferentVideoCard")
+        .arg("-fullscreen")
         .spawn()
         .expect("Не удалось запустить GTA V");
     
-    println!("GTA V запущен, ожидаем загрузки...");
-    thread::sleep(Duration::from_secs(5));
+    println!("[3/5] Ожидание загрузки игры и авторизации Social Club...");
+    println!("      ⏳ Ждём 30 секунд...");
+    
+    // Ожидание 30 секунд для полной загрузки и авторизации
+    for i in (1..=30).rev() {
+        print!("\r      Осталось {} секунд...", i);
+        thread::sleep(Duration::from_secs(1));
+    }
+    println!("\r      ✅ Игра загружена, продолжаем...        ");
     
     let pid = find_process_id("GTA5.exe");
     if pid == 0 {
         eprintln!("Ошибка: не найден процесс GTA5.exe");
         return;
     }
-    println!("Найден процесс GTA V (PID: {})", pid);
+    println!("      PID процесса: {}", pid);
     
+    println!("[4/5] Патчинг Social Club...");
+    patch_social_club(pid);
+    
+    println!("[5/5] Инъекция client.dll...");
     let dll_path = get_dll_path();
-    println!("Инъекция DLL: {}", dll_path);
+    println!("      DLL: {}", dll_path);
     
     match inject_dll(pid, &dll_path) {
         Ok(_) => println!("✅ DLL успешно инжектирована!"),
         Err(e) => println!("❌ Ошибка инъекции: {}", e),
     }
     
-    println!("Нажмите Enter для выхода...");
+    println!("\nНажмите Enter для выхода...");
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).unwrap();
 }
@@ -156,5 +173,58 @@ fn inject_dll(pid: u32, dll_path: &str) -> Result<(), String> {
         CloseHandle(thread);
         CloseHandle(process);
         Ok(())
+    }
+}
+
+fn patch_social_club(pid: u32) {
+    unsafe {
+        let process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+        if process.is_null() {
+            println!("      Не удалось открыть процесс для патча");
+            return;
+        }
+        
+        println!("      Поиск паттерна Social Club...");
+        
+        let pattern = [0x48, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9];
+        
+        if let Some(addr) = find_pattern(process, &pattern) {
+            let mut old_protect = 0;
+            VirtualProtect(addr as _, 3, PAGE_EXECUTE_READWRITE, &mut old_protect);
+            
+            let patch = [0xB0, 0x01, 0xC3];
+            std::ptr::copy_nonoverlapping(patch.as_ptr(), addr as *mut u8, patch.len());
+            
+            VirtualProtect(addr as _, 3, old_protect, &mut old_protect);
+            println!("      ✅ Social Club патч применён!");
+        } else {
+            println!("      ⚠️ Паттерн не найден, пропускаем");
+        }
+        
+        CloseHandle(process);
+    }
+}
+
+fn find_pattern(process: HANDLE, pattern: &[u8]) -> Option<*mut u8> {
+    unsafe {
+        let mut addr: *mut u8 = 0x400000 as *mut u8;
+        let mut mbi: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+        
+        while VirtualQueryEx(process, addr as _, &mut mbi, std::mem::size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
+            if mbi.State == MEM_COMMIT && (mbi.Protect & PAGE_READWRITE) != 0 {
+                let mut buffer = vec![0u8; mbi.RegionSize];
+                let mut bytes_read = 0;
+                
+                if ReadProcessMemory(process, mbi.BaseAddress, buffer.as_mut_ptr() as _, buffer.len(), &mut bytes_read) != 0 {
+                    for i in 0..bytes_read.saturating_sub(pattern.len()) {
+                        if buffer[i..i + pattern.len()] == pattern[..] {
+                            return Some((mbi.BaseAddress as usize + i) as *mut u8);
+                        }
+                    }
+                }
+            }
+            addr = (mbi.BaseAddress as usize + mbi.RegionSize) as *mut u8;
+        }
+        None
     }
 }

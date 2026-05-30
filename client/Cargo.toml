@@ -7,6 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-winapi = { version = "0.3", features = ["consoleapi", "processenv"] }
+winapi = { version = "0.3", features = ["memoryapi", "winnt", "libloaderapi", "consoleapi", "processenv"] }
 once_cell = "1.19"
 chrono = "0.4"
