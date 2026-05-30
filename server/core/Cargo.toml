@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib"]  # Создает .dll/.so/.dylib для FFI
 
 [dependencies]
-shared = { path = "../../shared" }
+# Дополнительные зависимости не нужны, всё в стандартной библиотеке
