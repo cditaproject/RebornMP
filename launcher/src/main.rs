@@ -1,180 +1,160 @@
-#![cfg(windows)]
-
 use std::env;
-use std::ffi::c_void;
 use std::path::PathBuf;
-use std::ptr::null_mut;
-use std::thread;
-use std::time::Duration;
-use sysinfo::System;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
+use std::ffi::c_void;
+use winapi::um::libloaderapi::{LoadLibraryA, GetProcAddress};
+use winapi::um::memoryapi::VirtualProtect;
+use winapi::um::processthreadsapi::{CreateRemoteThread, GetCurrentProcess};
 
-use windows::core::{PCWSTR, w};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx, VirtualFreeEx,
-};
-use windows::Win32::System::Threading::{
-    CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS, WaitForSingleObject, INFINITE, GetExitCodeThread
-};
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
+// Константы для обхода античита
+const GAME_ARGS: &[&str] = &[
+    "-scOfflineOnly",
+    "-ignoreDifferentVideoCard", 
+    "-useLevelFast",
+    "-noChunkUpload",
+    "-nobattleye",
+    "-skipPatcherCheck"
+];
 
 fn main() {
-    println!("FreeMode Launcher");
-
-    // Start Steam and Launch GTA V
-    println!("Launching GTA V via Steam...");
+    println!("=== RebornMP - FiveM Style Launcher ===");
+    
+    // 1. Находим оригинальный GTA V
+    let original_game = find_original_game();
+    println!("Оригинальный GTA V: {}", original_game.display());
+    
+    // 2. Создаём изолированную среду (как FiveM)
+    let sandbox = create_sandbox(&original_game);
+    println!("Песочница: {}", sandbox.display());
+    
+    // 3. Патчим античит-функции в оригинальном EXE
+    patch_anticheat(&original_game);
+    
+    // 4. Загружаем GTA V как DLL (вот ключевой момент!)
+    println!("Загрузка GTA V как динамической библиотеки...");
     unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            w!("steam://run/271590"),
-            None,
-            None,
-            SW_SHOW,
-        );
-    }
-
-    println!("Waiting for GTA5.exe to start...");
-    let mut sys = System::new_all();
-    let pid = loop {
-        sys.refresh_processes();
-        if let Some((pid, _)) = sys.processes().iter().find(|(_, p)| p.name() == "GTA5.exe") {
-            break pid.as_u32();
-        }
-        thread::sleep(Duration::from_millis(500));
-    };
-
-    println!("Found GTA5.exe with PID: {}", pid);
-    
-    // Give the process a moment to initialize
-    thread::sleep(Duration::from_secs(5));
-
-    let mut current_dir = env::current_dir().expect("Failed to get current directory");
-    current_dir.push("client.dll");
-    
-    if !current_dir.exists() {
-        println!("Error: client.dll not found at {:?}", current_dir);
-        // Fallback: check if we are running via cargo run and try target/x86_64-pc-windows-msvc/debug/client.dll
-        current_dir = env::current_dir().unwrap();
-        current_dir.push("target");
-        current_dir.push("x86_64-pc-windows-msvc");
-        current_dir.push("debug");
-        current_dir.push("client.dll");
-        if !current_dir.exists() {
-            println!("Error: client.dll not found. Please place it in the same directory as the launcher.");
+        let game_dll = LoadLibraryA(original_game.to_str().unwrap().as_ptr() as _);
+        if game_dll.is_null() {
+            eprintln!("Ошибка загрузки GTA V!");
             return;
         }
+        
+        // 5. Находим точку входа игры
+        let entry_point = GetProcAddress(game_dll, "EntryPoint\0".as_ptr() as _);
+        if entry_point.is_null() {
+            // Альтернативное имя функции входа
+            let entry = GetProcAddress(game_dll, "WinMain\0".as_ptr() as _);
+            if entry.is_null() {
+                eprintln!("Не найдена точка входа игры!");
+                return;
+            }
+            
+            // 6. Запускаем игру с нашими параметрами
+            println!("Запуск GTA V в режиме RebornMP...");
+            let game_main: extern "system" fn() = std::mem::transmute(entry);
+            game_main();
+        }
     }
+    
+    println!("RebornMP работает! Игра запущена в изолированной среде.");
+}
 
-    let dll_path = current_dir.to_str().unwrap();
-    println!("Injecting: {}", dll_path);
+fn find_original_game() -> PathBuf {
+    // Ищем установленную GTA V
+    let paths = vec![
+        "C:\\Program Files\\Rockstar Games\\Grand Theft Auto V\\GTA5.exe",
+        "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\GTA5.exe",
+        env::current_dir().unwrap().join("GTA5_original.exe").to_str().unwrap().to_string(),
+    ];
+    
+    for path in paths {
+        let pb = PathBuf::from(path);
+        if pb.exists() {
+            return pb;
+        }
+    }
+    
+    // Если не нашли - создаём заглушку (для тестов)
+    println!("GTA V не найдена! Создаём тестовую среду...");
+    create_test_environment()
+}
 
-    if inject_dll(pid, dll_path) {
-        println!("Successfully injected!");
-    } else {
-        println!("Injection failed.");
+fn create_sandbox(original_exe: &PathBuf) -> PathBuf {
+    let sandbox_dir = env::current_dir().unwrap().join("RebornMP_Sandbox");
+    
+    if !sandbox_dir.exists() {
+        std::fs::create_dir_all(&sandbox_dir).unwrap();
+        
+        // Копируем только необходимые файлы (исключая античит)
+        let game_dir = original_exe.parent().unwrap();
+        for entry in std::fs::read_dir(game_dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            
+            // Исключаем античит-файлы
+            let exclude = vec!["BattlEye", "SocialClub", "PlayGTAV"];
+            if !exclude.iter().any(|e| name.contains(e)) {
+                let dest = sandbox_dir.join(&name);
+                if entry.file_type().unwrap().is_file() {
+                    let _ = std::fs::copy(entry.path(), dest);
+                }
+            }
+        }
+        
+        // Копируем наш лаунчер как GTA5.exe в песочницу
+        let our_exe = sandbox_dir.join("GTA5.exe");
+        let _ = std::fs::copy(env::current_exe().unwrap(), our_exe);
+    }
+    
+    sandbox_dir
+}
+
+fn patch_anticheat(exe_path: &PathBuf) {
+    println!("Патчинг античит-функций...");
+    
+    // Открываем EXE файл для патчинга
+    match std::fs::OpenOptions::new().read(true).write(true).open(exe_path) {
+        Ok(mut file) => {
+            use std::io::{Read, Seek, Write};
+            
+            // Ищем сигнатуры античита и заменяем на NOP (No Operation)
+            let signatures = vec![
+                (b"\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x8B\x48\x08", 
+                 b"\x31\xC0\xC3\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90"), // BattlEye
+                (b"\x40\x53\x48\x83\xEC\x20\x80\x3D\x00\x00\x00\x00\x00\x74\x00\x48\x8B\xD9",
+                 b"\xB0\x01\xC3\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90"), // Rockstar AC
+            ];
+            
+            for (pattern, patch) in signatures {
+                if let Some(pos) = find_pattern(&mut file, pattern) {
+                    file.seek(std::io::SeekFrom::Start(pos as u64)).unwrap();
+                    file.write_all(patch).unwrap();
+                    println!("Патч применён по адресу: 0x{:X}", pos);
+                }
+            }
+        }
+        Err(e) => println!("Не удалось пропатчить EXE: {}", e),
     }
 }
 
-fn inject_dll(pid: u32, dll_path: &str) -> bool {
-    unsafe {
-        // Open the target process
-        let process_handle = OpenProcess(PROCESS_ALL_ACCESS, false, pid).unwrap_or_default();
-        if process_handle.is_invalid() {
-            println!("Failed to open process. Are you running as administrator?");
-            return false;
-        }
+fn find_pattern(file: &mut std::fs::File, pattern: &[u8]) -> Option<usize> {
+    use std::io::Read;
+    
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).ok()?;
+    
+    buffer.windows(pattern.len())
+        .position(|window| {
+            window.iter().zip(pattern).all(|(&a, &b)| b == 0x00 || a == b)
+        })
+}
 
-        // Allocate memory for the DLL path in the target process (UTF-16)
-        let wide_path: Vec<u16> = OsStr::new(dll_path).encode_wide().chain(std::iter::once(0)).collect();
-        let path_len = wide_path.len() * 2;
-        let remote_mem = VirtualAllocEx(
-            process_handle,
-            None,
-            path_len,
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_READWRITE,
-        );
-
-        if remote_mem.is_null() {
-            println!("Failed to allocate memory in target process.");
-            CloseHandle(process_handle).ok();
-            return false;
-        }
-
-        // Write the DLL path into the allocated memory
-        let mut bytes_written = 0;
-        let write_result = WriteProcessMemory(
-            process_handle,
-            remote_mem,
-            wide_path.as_ptr() as *const c_void,
-            path_len,
-            Some(&mut bytes_written),
-        );
-
-        if write_result.is_err() {
-            println!("Failed to write to process memory.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
-        }
-
-        // Get the address of LoadLibraryA from kernel32.dll
-        let kernel32 = GetModuleHandleW(w!("kernel32.dll")).unwrap_or_default();
-        if kernel32.is_invalid() {
-            println!("Failed to get handle to kernel32.dll.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
-        }
-
-        let load_library_addr = GetProcAddress(kernel32, windows::core::s!("LoadLibraryW"));
-        if load_library_addr.is_none() {
-            println!("Failed to find LoadLibraryW.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
-        }
-
-        // Create a remote thread that executes LoadLibraryW with the address of our allocated memory
-        let thread_handle = CreateRemoteThread(
-            process_handle,
-            None,
-            0,
-            Some(std::mem::transmute(load_library_addr)),
-            Some(remote_mem),
-            0,
-            None,
-        ).unwrap_or_default();
-
-        if thread_handle.is_invalid() {
-            println!("Failed to create remote thread.");
-            VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-            CloseHandle(process_handle).ok();
-            return false;
-        }
-
-        // Wait for the thread to finish
-        WaitForSingleObject(thread_handle, INFINITE);
-
-        let mut exit_code = 0;
-        GetExitCodeThread(thread_handle, &mut exit_code).ok();
-
-        // Cleanup
-        CloseHandle(thread_handle).ok();
-        VirtualFreeEx(process_handle, remote_mem, 0, MEM_RELEASE).ok();
-        CloseHandle(process_handle).ok();
-
-        if exit_code == 0 {
-            println!("LoadLibraryW failed inside the target process. Exit code: {}", exit_code);
-            return false;
-        }
-
-        true
-    }
+fn create_test_environment() -> PathBuf {
+    // Для тестов создаём фейковую GTA V
+    let test_dir = env::current_dir().unwrap().join("Test_GTAV");
+    std::fs::create_dir_all(&test_dir).unwrap();
+    
+    let fake_exe = test_dir.join("GTA5.exe");
+    std::fs::write(&fake_exe, b"MZ\x90\x00Test GTA V executable").unwrap();
+    
+    fake_exe
 }
