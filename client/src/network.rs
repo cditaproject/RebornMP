@@ -21,13 +21,9 @@ pub fn start_client() {
                                 println!("📩 Received: {}", msg);
                                 
                                 if msg.contains("\"disableStory\"") {
-                                        memory::full_story_bypass();
-                                        memory::disable_story();
-                                        thread::sleep(Duration::from_millis(500));
-                                        memory::exit_story_mode();  // <-- принудительный выход из сюжета
+                                    memory::disable_story();
                                 }
                                 if msg.contains("\"spawn\"") {
-                                    std::thread::sleep(std::time::Duration::from_millis(500));
                                     memory::teleport_to_spawn();
                                 }
                             }
