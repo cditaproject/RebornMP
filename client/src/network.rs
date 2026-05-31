@@ -21,6 +21,7 @@ pub fn start_client() {
                                 println!("📩 Received: {}", msg);
                                 
                                 if msg.contains("\"disableStory\"") {
+                                        memory::full_story_bypass();
                                         memory::disable_story();
                                         thread::sleep(Duration::from_millis(500));
                                         memory::exit_story_mode();  // <-- принудительный выход из сюжета

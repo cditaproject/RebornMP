@@ -101,19 +101,70 @@ pub fn get_player_ptr() -> *mut u8 {
         *((addr) as *mut *mut u8)
     }
 }
-
-pub fn disable_story() {
-    let addr = STORY_FLAG_ADDR.load(Ordering::Relaxed);
-    if addr == 0 { 
-        println!("⚠️ Story flag not found, use Cheat Engine to find it");
-        return; 
-    }
+pub fn write_memory(addr: *mut u8, bytes: &[u8]) {
     unsafe {
-        let mut old = 0;
-        VirtualProtect(addr as _, 1, PAGE_EXECUTE_READWRITE, &mut old);
-        *(addr as *mut u8) = 0;
-        VirtualProtect(addr as _, 1, old, &mut old);
-        println!("✅ Story mode disabled!");
+        let mut old_protect = 0;
+        VirtualProtect(
+            addr as _,
+            bytes.len(),
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        );
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr, bytes.len());
+        VirtualProtect(addr as _, bytes.len(), old_protect, &mut old_protect);
+    }
+}
+pub fn full_story_bypass() {
+    unsafe {
+        let process = OpenProcess(PROCESS_ALL_ACCESS, 0, std::process::id());
+        if process.is_null() { return; }
+        
+        // 1. Отключаем флаг активного сюжета
+        let story_active_sig = [0x48, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x74, 0x00];
+        if let Some(addr) = find_pattern(process, &story_active_sig) {
+            let offset = *(addr.offset(3) as *const i32);
+            let flag_ptr = (addr as usize + 7 + offset as usize) as *mut u8;
+            *flag_ptr = 0;
+            println!("✅ Story active flag cleared!");
+        }
+        
+        // 2. Патчим функцию запуска миссий
+        let mission_start_sig = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8];
+        if let Some(addr) = find_pattern(process, &mission_start_sig) {
+            // Заменяем на `ret` (функция ничего не делает)
+            let patch = [0xC3, 0x90, 0x90, 0x90];
+            write_memory(addr, &patch);
+            println!("✅ Mission start patched!");
+        }
+        
+        // 3. Отключаем загрузку сюжетных скриптов
+        let script_load_sig = [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57];
+        if let Some(addr) = find_pattern(process, &script_load_sig) {
+            write_memory(addr, &[0xC3, 0x90]);
+            println!("✅ Story scripts disabled!");
+        }
+        
+        CloseHandle(process);
+    }
+}
+pub fn disable_story() {
+    unsafe {
+        let process = OpenProcess(PROCESS_ALL_ACCESS, 0, std::process::id());
+        if process.is_null() { return; }
+
+        // Надёжный патч из FiveM для переключения в свободный режим
+        let pattern = [0x48, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x74, 0x00];
+        
+        if let Some(addr) = find_pattern(process, &pattern) {
+            // Получаем адрес указателя на глобальный флаг
+            let offset = *(addr.offset(3) as *const i32);
+            let flag_ptr = (addr as usize + 7 + offset as usize) as *mut u8;
+            
+            // Меняем значение на 0 (свободный режим)
+            *flag_ptr = 0;
+            println!("✅ Free mode enabled!");
+        }
+        CloseHandle(process);
     }
 }
 pub fn force_free_mode() {
