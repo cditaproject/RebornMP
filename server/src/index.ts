@@ -6,13 +6,11 @@ const SPAWN_POINT = { x: -1038.5, y: -2745.0, z: 20.0 };
 const server = net.createServer((socket) => {
     console.log(`[Server] Client connected from ${socket.remoteAddress}`);
     
-    // 1. Отправляем режим свободной игры
     socket.write(JSON.stringify({
         type: "freeMode",
         data: true
     }) + '\n');
     
-    // 2. Отправляем команду телепортации на спавн
     setTimeout(() => {
         socket.write(JSON.stringify({
             type: "spawn",
@@ -21,18 +19,15 @@ const server = net.createServer((socket) => {
         console.log(`[Server] Sent spawn command to client`);
     }, 1000);
     
-    // 3. Отключаем сюжет
     socket.write(JSON.stringify({
         type: "disableStory",
         data: true
     }) + '\n');
     
-    // Обработка сообщений от клиента
     socket.on('data', (data) => {
         const msg = data.toString();
         console.log(`[Server] Received: ${msg}`);
         
-        // Отправляем подтверждение
         socket.write(JSON.stringify({
             type: "ack",
             data: "received"

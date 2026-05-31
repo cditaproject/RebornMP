@@ -18,6 +18,7 @@ pub extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut
             // Инициализируем сканер памяти
             memory::init();
             
+            // Запускаем клиент в отдельном потоке
             thread::spawn(|| {
                 thread::sleep(Duration::from_secs(2));
                 network::start_client();

@@ -6,10 +6,9 @@ use winapi::shared::ntdef::HANDLE;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ptr;
 
-// Найденные адреса (заполнятся автоматически)
 static PLAYER_PTR_ADDR: AtomicUsize = AtomicUsize::new(0);
 static HEALTH_ADDR: AtomicUsize = AtomicUsize::new(0);
-pub static OFFSET_POSITION: isize = 0x90;  // Смещение координат (стабильно)
+pub static OFFSET_POSITION: isize = 0x90;
 
 pub fn init() {
     println!("[Memory] 🔍 Scanning for GTA V addresses...");
@@ -21,7 +20,6 @@ pub fn init() {
             return;
         }
         
-        // Сигнатура для указателя на игрока (CPlayerInfo)
         let player_sig = [0x48, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x74, 0x00];
         if let Some(addr) = find_pattern(&process, &player_sig) {
             let offset = *(addr.offset(3) as *const i32);
@@ -32,7 +30,6 @@ pub fn init() {
             println!("[Memory] ⚠️ Player pointer signature not found");
         }
         
-        // Сигнатура для здоровья игрока
         let health_sig = [0x48, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x74, 0x00, 0x8B, 0x81];
         if let Some(addr) = find_pattern(&process, &health_sig) {
             let offset = *(addr.offset(3) as *const i32);
@@ -45,7 +42,6 @@ pub fn init() {
     }
 }
 
-// Паттерн-сканер (ищет сигнатуру в памяти процесса)
 fn find_pattern(process: &HANDLE, pattern: &[u8]) -> Option<*mut u8> {
     unsafe {
         let mut addr: *mut u8 = 0x400000 as *mut u8;
@@ -73,12 +69,11 @@ fn find_pattern(process: &HANDLE, pattern: &[u8]) -> Option<*mut u8> {
     }
 }
 
-// Получить указатель на игрока
 pub fn get_player_ptr() -> *mut u8 {
     let addr = PLAYER_PTR_ADDR.load(Ordering::Relaxed);
     if addr == 0 { 
         println!("⚠️ Player pointer not found, retry scanning...");
-        init(); // Пробуем пересканировать
+        init();
         let addr = PLAYER_PTR_ADDR.load(Ordering::Relaxed);
         if addr == 0 { return std::ptr::null_mut(); }
         unsafe { *((addr) as *mut *mut u8) }
@@ -87,7 +82,6 @@ pub fn get_player_ptr() -> *mut u8 {
     }
 }
 
-// Отключение сюжета (патчит флаг)
 pub fn disable_story() {
     println!("📖 Disabling story mode...");
     
@@ -98,7 +92,6 @@ pub fn disable_story() {
             return; 
         }
         
-        // Сигнатура для флага сюжета
         let story_sig = [0x80, 0x3D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x74, 0x00];
         if let Some(addr) = find_pattern(&process, &story_sig) {
             let offset = *(addr.offset(2) as *const i32);
@@ -116,7 +109,6 @@ pub fn disable_story() {
     }
 }
 
-// Телепортация на точку спавна
 pub fn teleport_to_spawn() {
     println!("📍 Attempting to teleport...");
     
@@ -139,14 +131,12 @@ pub fn teleport_to_spawn() {
     println!("⚠️ Teleport failed after 6 seconds - player not ready");
 }
 
-// Получить здоровье игрока
 pub fn get_health() -> u32 {
     let addr = HEALTH_ADDR.load(Ordering::Relaxed);
     if addr == 0 { return 0; }
     unsafe { *(addr as *mut u32) }
 }
 
-// Запись в защищённую память
 pub fn write_memory(addr: *mut u8, bytes: &[u8]) {
     unsafe {
         let mut old_protect = 0;
